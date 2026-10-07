@@ -1,0 +1,36 @@
+{
+  "name": "twib-clip-dashboard",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w apps/web",
+    "dev:worker": "wrangler dev --config apps/worker/wrangler.toml --env local",
+    "db:local": "wrangler d1 migrations apply twib-review-local --local --config apps/worker/wrangler.toml --env local",
+    "build": "npm run build -w apps/web && wrangler deploy --dry-run --config apps/worker/wrangler.toml --outdir dist/worker",
+    "typecheck": "tsc --noEmit && npm run typecheck -w apps/web",
+    "lint": "eslint apps/worker packages/shared && npm run lint --if-present -w apps/web",
+    "test": "vitest run",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "test:browser": "node security-review/browser-regression.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261007.1",
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "playwright": "1.64.0",
+    "prettier": "^3.9.9",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "jose": "^6.0.0",
+    "zod": "^4.0.0"
+  }
+}

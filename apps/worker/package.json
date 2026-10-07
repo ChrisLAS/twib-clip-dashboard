@@ -1,0 +1,1 @@
+{"name":"@twib/worker","private":true,"type":"module","dependencies":{"@twib/shared":"*"}}
