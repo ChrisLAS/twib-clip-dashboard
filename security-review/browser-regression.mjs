@@ -218,9 +218,339 @@ function updateCatalogStatus(version) {
   episode.catalogVersion = version;
 }
 updateCatalogStatus(1);
+// The workspace/intake stage uses a separate, wholly fictional catalog. Keep
+// the existing media, review and automatic-sync regressions unchanged.
+let intakeFixtureEnabled = false;
+const intakeEpisodes = [
+  {
+    ...globalThis.structuredClone(initialEpisode),
+    id: "ep-127",
+    number: 127,
+    title: "Fictional upcoming episode",
+    status: "draft",
+    isActive: true,
+    workspaceRevision: 1,
+    uploadFolderUrl:
+      "https://drive.google.com/drive/folders/fictional-intake-folder",
+    intakeCount: 0,
+    clipCount: 0,
+    clips: [],
+  },
+  {
+    ...globalThis.structuredClone(initialEpisode),
+    id: "ep-126",
+    number: 126,
+    title: "Fictional previous episode",
+    status: "published",
+    isActive: false,
+    workspaceRevision: 1,
+    uploadFolderUrl: null,
+    intakeCount: 0,
+    clips: ["c126a", "c126b"].map((id) => ({
+      ...makeClip(id),
+      episodeId: "ep-126",
+    })),
+  },
+];
+const manualIntake = [];
+const intakeWrites = [];
+const operationReads = [];
+const operationReceipts = new Map();
+const intakeReads = [];
+const workspaceReads = [];
+let intakeVersion = 0;
+let intakeSaveMode = "success";
+let nextIntakeDuplicateMatches = null;
+let heldWorkspaceId = null;
+let holdIntakeReads = false;
+const heldWorkspaceResponses = [];
+const heldIntakeResponses = [];
+const heldIntakeWrites = [];
+function canonicalFixtureUrl(value) {
+  const url = new URL(value);
+  // Synthetic deterministic duplicate behavior, not a substitute for server
+  // URL validation/canonicalization tests.
+  if (url.hostname === "youtu.be")
+    return `https://www.youtube.com/watch?v=${url.pathname.slice(1)}`;
+  if (url.hostname === "www.youtube.com")
+    return `https://www.youtube.com/watch?v=${url.searchParams.get("v")}`;
+  url.hash = "";
+  url.searchParams.delete("utm_source");
+  return url.href;
+}
+async function handleIntakeFixture(route, path) {
+  const req = route.request();
+  if (path === "/api/episodes") {
+    await fulfillApiFixture(route, {
+      json: intakeEpisodes.map((entry) => ({
+        ...entry,
+        intakeCount: manualIntake.filter(
+          (item) => item.episodeId === entry.id && item.status !== "cancelled",
+        ).length,
+      })),
+    });
+  } else if (path.startsWith("/api/episodes/")) {
+    const id = decodeURIComponent(path.slice("/api/episodes/".length));
+    const entry = intakeEpisodes.find((candidate) => candidate.id === id);
+    if (!entry) throw new Error(`Unexpected fixture episode: ${id}`);
+    const snapshot = globalThis.structuredClone(entry);
+    workspaceReads.push(id);
+    if (heldWorkspaceId === id)
+      await new Promise((resolve) => heldWorkspaceResponses.push(resolve));
+    await fulfillApiFixture(route, { json: snapshot });
+  } else if (path === "/api/intake" && req.method() === "GET") {
+    const snapshot = {
+      version: intakeVersion,
+      items: globalThis.structuredClone(manualIntake),
+    };
+    intakeReads.push(snapshot);
+    if (holdIntakeReads)
+      await new Promise((resolve) => heldIntakeResponses.push(resolve));
+    await fulfillApiFixture(route, { json: snapshot });
+  } else if (path === "/api/catalog/status") {
+    statusRequests.push({ method: req.method(), body: req.postData() });
+    await fulfillApiFixture(route, {
+      json: {
+        ...catalogStatus,
+        version: 1,
+        intakeVersion,
+        workspaceVersion: 1,
+        sync: { ...catalogStatus.sync, lastError: null },
+        clips: intakeEpisodes.flatMap((entry) =>
+          entry.clips.map((clip) => ({
+            id: clip.id,
+            episodeId: entry.id,
+            revision: clip.catalogRevision,
+            currentRenderId: clip.currentRenderId,
+          })),
+        ),
+      },
+    });
+  } else if (path.startsWith("/api/operations/")) {
+    const key = decodeURIComponent(path.slice("/api/operations/".length));
+    operationReads.push(key);
+    const receipt = operationReceipts.get(key);
+    await fulfillApiFixture(
+      route,
+      receipt
+        ? { json: receipt }
+        : {
+            status: 404,
+            json: {
+              error: {
+                code: "NOT_FOUND",
+                message: "No synthetic operation receipt",
+              },
+            },
+          },
+    );
+  } else if (path.startsWith("/api/intake/") && req.method() === "POST") {
+    const input = req.postDataJSON();
+    intakeWrites.push({ path, input, csrf: req.headers()["x-csrf-token"] });
+    const previous = operationReceipts.get(input.idempotencyKey);
+    if (previous) {
+      await fulfillApiFixture(route, { json: previous });
+      return true;
+    }
+    const item = manualIntake.find(
+      (candidate) =>
+        candidate.id === decodeURIComponent(path.slice("/api/intake/".length)),
+    );
+    if (!item) throw new Error(`Unexpected fixture intake: ${path}`);
+    if (input.expectedRevision !== item.revision) {
+      await fulfillApiFixture(route, {
+        status: 409,
+        json: {
+          error: {
+            code: "REVISION_CONFLICT",
+            message: "This submission changed elsewhere.",
+          },
+          currentRevision: item.revision,
+        },
+      });
+      return true;
+    }
+    const next = {
+      ...item,
+      ...Object.fromEntries(
+        ["episodeId", "inMs", "outMs", "whyItMatters"]
+          .filter((key) => key in input)
+          .map((key) => [key, input[key]]),
+      ),
+      status: input.action === "cancel" ? "cancelled" : "awaiting_processing",
+    };
+    const matches =
+      next.status === "cancelled"
+        ? []
+        : manualIntake
+            .filter(
+              (other) =>
+                other.id !== item.id &&
+                other.status === "awaiting_processing" &&
+                other.canonicalUrl === next.canonicalUrl,
+            )
+            .map((other) => ({
+              kind: "intake",
+              id: other.id,
+              episodeId: other.episodeId,
+              rangeMatch:
+                other.inMs === next.inMs && other.outMs === next.outMs
+                  ? "exact"
+                  : "different",
+            }));
+    if (
+      matches.some((match) => match.rangeMatch === "exact") ||
+      (matches.length && !input.allowDifferentRange)
+    ) {
+      await fulfillApiFixture(route, {
+        status: 409,
+        json: {
+          error: {
+            code: matches.some((match) => match.rangeMatch === "exact")
+              ? "DUPLICATE_INTAKE"
+              : "DUPLICATE_SOURCE",
+            message: "Another cut of this source is already saved.",
+          },
+          duplicateMatches: matches,
+          existingIntakeIds: matches.map((match) => match.id),
+        },
+      });
+      return true;
+    }
+    Object.assign(item, next, { revision: item.revision + 1 });
+    const result = {
+      intake: globalThis.structuredClone(item),
+      intakeVersion: ++intakeVersion,
+    };
+    operationReceipts.set(input.idempotencyKey, result);
+    await fulfillApiFixture(route, { json: result });
+  } else if (path === "/api/intake" && req.method() === "POST") {
+    const input = req.postDataJSON();
+    intakeWrites.push({ path, input, csrf: req.headers()["x-csrf-token"] });
+    const mode = intakeSaveMode;
+    if (mode === "hold")
+      await new Promise((resolve) => heldIntakeWrites.push(resolve));
+    const previous = operationReceipts.get(input.idempotencyKey);
+    if (previous) {
+      await fulfillApiFixture(route, { json: previous });
+      return true;
+    }
+    if (mode === "uncertain") {
+      await fulfillApiFixture(route, {
+        status: 503,
+        json: {
+          error: {
+            code: "UNAVAILABLE",
+            message: "Synthetic intake save interrupted",
+          },
+        },
+      });
+      return true;
+    }
+    if (nextIntakeDuplicateMatches) {
+      const matches = nextIntakeDuplicateMatches;
+      nextIntakeDuplicateMatches = null;
+      await fulfillApiFixture(route, {
+        status: 409,
+        json: {
+          error: {
+            code: "DUPLICATE_INTAKE",
+            message: "This synthetic source is already saved.",
+          },
+          duplicateMatches: matches,
+          existingIntakeIds: matches
+            .filter((match) => match.kind === "intake")
+            .map((match) => match.id),
+        },
+      });
+      return true;
+    }
+    const canonicalUrl = canonicalFixtureUrl(input.url);
+    const sameSource = manualIntake.filter(
+      (item) =>
+        item.status !== "cancelled" && item.canonicalUrl === canonicalUrl,
+    );
+    const exactDuplicate = sameSource.find(
+      (item) =>
+        item.inMs === (input.inMs ?? null) &&
+        item.outMs === (input.outMs ?? null),
+    );
+    const duplicate = exactDuplicate ?? sameSource[0];
+    if (duplicate && (exactDuplicate || !input.allowDifferentRange)) {
+      await fulfillApiFixture(route, {
+        status: 409,
+        json: {
+          error: {
+            code: exactDuplicate ? "DUPLICATE_INTAKE" : "DUPLICATE_SOURCE",
+            message: "This source and range are already saved.",
+          },
+          existingIntakeIds: [duplicate.id],
+          duplicateMatches: [
+            {
+              kind: "intake",
+              id: duplicate.id,
+              episodeId: duplicate.episodeId,
+              rangeMatch: exactDuplicate ? "exact" : "different",
+            },
+          ],
+        },
+      });
+      return true;
+    }
+    const item = {
+      id: `intake-fixture-${manualIntake.length + 1}`,
+      episodeId: input.episodeId,
+      kind: input.kind,
+      submittedUrl: input.url,
+      canonicalUrl,
+      provider: /youtube|youtu\.be/.test(canonicalUrl)
+        ? "youtube"
+        : canonicalUrl.includes("drive.google.com")
+          ? "drive"
+          : "other",
+      inMs: input.inMs ?? null,
+      outMs: input.outMs ?? null,
+      whyItMatters: input.whyItMatters ?? "",
+      status: "awaiting_processing",
+      revision: 1,
+      createdAt: "2026-10-08T03:00:00Z",
+      updatedAt: "2026-10-08T03:00:00Z",
+    };
+    manualIntake.push(item);
+    const result = { intake: item, intakeVersion: ++intakeVersion };
+    operationReceipts.set(input.idempotencyKey, result);
+    await fulfillApiFixture(
+      route,
+      mode === "committed-uncertain"
+        ? {
+            status: 503,
+            json: {
+              error: {
+                code: "UNAVAILABLE",
+                message: "Synthetic response lost after commit",
+              },
+            },
+          }
+        : { json: result },
+    );
+  } else {
+    return false;
+  }
+  return true;
+}
 const requests = [];
 const googleRequests = [];
+const externalRequests = [];
+const fixtureOrigin = new URL(
+  process.env.TEST_BASE_URL || "http://127.0.0.1:5173/",
+).origin;
 page.on("request", (request) => {
+  const requestedUrl = new URL(request.url());
+  if (
+    /^https?:$/.test(requestedUrl.protocol) &&
+    requestedUrl.origin !== fixtureOrigin
+  )
+    externalRequests.push(request.url());
   if (
     /(^|\.)(googleapis|google|googleusercontent)\.com$/.test(
       new URL(request.url()).hostname,
@@ -292,6 +622,56 @@ async function refreshSlate() {
     .first()
     .click();
 }
+async function chooseWorkspace(id) {
+  await page
+    .getByRole("combobox", { name: "Episode", exact: true })
+    .selectOption(id);
+  await waitUntil(
+    () => new URL(page.url()).searchParams.get("episode") === id,
+    `episode URL changes to ${id}`,
+  );
+}
+async function openIntake() {
+  await page
+    .getByRole("button", { name: "Add clip or source", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "Add to your slate",
+    exact: true,
+  });
+  await dialog.waitFor();
+  return dialog;
+}
+async function fillIntake(
+  dialog,
+  {
+    url,
+    kind = "full_source",
+    start = "1:02.500",
+    end = "1:12.500",
+    note = "Fictional editorial context",
+  },
+) {
+  await dialog
+    .getByLabel("Source URL or private Drive link", { exact: true })
+    .fill(url);
+  await dialog.getByLabel(/^Source type/).selectOption(kind);
+  await dialog.getByLabel(/^Start time/).fill(start);
+  await dialog.getByLabel(/^End time/).fill(end);
+  await dialog.getByLabel(/^Why it matters/).fill(note);
+}
+async function saveIntake(dialog) {
+  await dialog
+    .getByRole("button", { name: "Save intake", exact: true })
+    .click();
+}
+// No synthetic URL may turn into a live provider lookup. API/media handlers
+// registered below take precedence, and local frontend assets pass through.
+await page.route(/^https?:\/\//, async (route) => {
+  if (new URL(route.request().url()).origin !== fixtureOrigin)
+    await route.abort("blockedbyclient");
+  else await route.continue();
+});
 // Abort forbidden Google traffic so a regression cannot contact a live account.
 await page.route(
   /^https?:\/\/(?:[^/]+\.)?(?:googleapis\.com|google\.com|googleusercontent\.com)(?:\/|$)/,
@@ -308,13 +688,14 @@ await page.route("**/api/**", async (route) => {
   const req = route.request(),
     path = new URL(req.url()).pathname;
   requests.push({ path, method: req.method() });
+  if (intakeFixtureEnabled && (await handleIntakeFixture(route, path))) return;
   let body;
   if (path === "/api/session")
     body = {
       csrfToken: "fixture",
       mode: "production",
       owner: "Test owner",
-      integrations: { drive: true, producer: true },
+      integrations: { drive: true, producer: true, intakeProducer: false },
     };
   else if (path === "/api/catalog/status") {
     statusRequests.push({ method: req.method(), body: req.postData() });
@@ -344,7 +725,9 @@ await page.route("**/api/**", async (route) => {
       return;
     }
     body = { imported: 1 };
-  } else if (path === "/api/episodes") body = [episode];
+  } else if (path === "/api/intake" && req.method() === "GET")
+    body = { version: 0, items: [] };
+  else if (path === "/api/episodes") body = [episode];
   else if (path === "/api/episodes/ep-demo") {
     body = globalThis.structuredClone(episode);
     episodeRequests.push({ version: body.catalogVersion });
@@ -1303,6 +1686,658 @@ try {
   );
   await capture("automatic-sync-slate");
 
+  // Empty episode workspaces and manual intake are separate from rendered
+  // clips. Every source below is fabricated; external traffic is blocked.
+  intakeFixtureEnabled = true;
+  await page.goto(process.env.TEST_BASE_URL || "http://127.0.0.1:5173/");
+  const episodePicker = page.getByRole("combobox", {
+    name: "Episode",
+    exact: true,
+  });
+  await page
+    .getByRole("heading", { name: "No reviewable clips yet", exact: true })
+    .waitFor();
+  check(
+    "Active empty episode 127 opens without falling back to episode 126",
+    (await episodePicker.inputValue()) === "ep-127" &&
+      new URL(page.url()).searchParams.get("episode") === "ep-127" &&
+      (await page.getByRole("button", { name: /^Review Clip/ }).count()) ===
+        0 &&
+      (await episodePicker.locator("option").allTextContents()).some((text) =>
+        /Episode 126.*published/.test(text),
+      ),
+  );
+  await capture("episode-127-empty");
+  await chooseWorkspace("ep-126");
+  const previousClip = page.getByRole("button", {
+    name: "Review Clip c126a by Speaker c126a",
+    exact: true,
+  });
+  await previousClip.waitFor();
+  check(
+    "Episode picker loads the selected published slate",
+    (await page.locator(".clip-row").count()) === 2,
+  );
+  await page.reload();
+  await previousClip.waitFor();
+  check(
+    "Episode selection survives a full refresh",
+    (await episodePicker.inputValue()) === "ep-126",
+  );
+  await chooseWorkspace("ep-127");
+  await page
+    .getByRole("heading", { name: "No reviewable clips yet", exact: true })
+    .waitFor();
+  await page.goBack();
+  await previousClip.waitFor();
+  check(
+    "Browser Back restores the prior episode slate",
+    (await episodePicker.inputValue()) === "ep-126",
+  );
+  await page.goForward();
+  await page
+    .getByRole("heading", { name: "No reviewable clips yet", exact: true })
+    .waitFor();
+  check(
+    "Browser Forward restores the empty active workspace",
+    (await episodePicker.inputValue()) === "ep-127",
+  );
+
+  heldWorkspaceId = "ep-126";
+  await chooseWorkspace("ep-126");
+  await waitUntil(
+    () => heldWorkspaceResponses.length === 1,
+    "held old episode load",
+  );
+  check(
+    "Switching episodes clears the prior slate while the requested workspace loads",
+    (await page.locator(".clip-row").count()) === 0,
+  );
+  await page.goBack();
+  await page
+    .getByRole("heading", { name: "No reviewable clips yet", exact: true })
+    .waitFor();
+  heldWorkspaceId = null;
+  await releaseResponses(heldWorkspaceResponses);
+  check(
+    "Late episode response cannot replace a newer browser navigation",
+    (await episodePicker.inputValue()) === "ep-127" &&
+      new URL(page.url()).searchParams.get("episode") === "ep-127" &&
+      (await page.locator(".clip-row").count()) === 0,
+  );
+  await chooseWorkspace("ep-126");
+  await previousClip.waitFor();
+  await previousClip.click();
+  await page
+    .locator("#review-note")
+    .fill("Keep this exact episode-126 render draft");
+  await page
+    .getByRole("button", { name: "Episode 126", exact: false })
+    .first()
+    .click();
+  await chooseWorkspace("ep-127");
+  await page
+    .getByRole("heading", { name: "No reviewable clips yet", exact: true })
+    .waitFor();
+  await chooseWorkspace("ep-126");
+  await previousClip.waitFor();
+  await previousClip.click();
+  check(
+    "Review draft stays attached to its exact render across episode switches",
+    (await page.locator("#review-note").inputValue()) ===
+      "Keep this exact episode-126 render draft" &&
+      (await page.locator("video").getAttribute("src")) ===
+        "/media/c126a-v1/original",
+  );
+  await page
+    .getByRole("button", { name: "Episode 126", exact: false })
+    .first()
+    .click();
+  heldWorkspaceId = "ep-126";
+  await refreshSlate();
+  await waitUntil(
+    () => heldWorkspaceResponses.length === 1,
+    "held refresh before episode switch",
+  );
+  await chooseWorkspace("ep-127");
+  await page
+    .getByRole("heading", { name: "No reviewable clips yet", exact: true })
+    .waitFor();
+  heldWorkspaceId = null;
+  await releaseResponses(heldWorkspaceResponses);
+  check(
+    "Late refresh cannot relabel an old slate as the new episode",
+    (await episodePicker.inputValue()) === "ep-127" &&
+      (await page.locator(".clip-row").count()) === 0,
+  );
+
+  let intakeDialog = await openIntake();
+  const uploadFolder = intakeDialog.getByRole("link", {
+    name: /Open private episode upload folder/,
+  });
+  await uploadFolder.waitFor();
+  check(
+    "Configured private upload folder is an isolated external link, not an upload widget",
+    (await uploadFolder.getAttribute("href")) ===
+      "https://drive.google.com/drive/folders/fictional-intake-folder" &&
+      (await uploadFolder.getAttribute("target")) === "_blank" &&
+      /\bnoopener\b/.test(await uploadFolder.getAttribute("rel")) &&
+      /\bnoreferrer\b/.test(await uploadFolder.getAttribute("rel")) &&
+      (await page.locator('input[type="file"],iframe').count()) === 0 &&
+      (await intakeDialog
+        .getByText(/The dashboard does not upload files/)
+        .isVisible()),
+  );
+  const validationWriteCount = intakeWrites.length;
+  for (const url of [
+    "javascript:alert(1)",
+    "https://user:password@example.com/source",
+    "http://127.0.0.1/source",
+    "https://drive.google.com/drive/folders/fictional-folder",
+  ]) {
+    await fillIntake(intakeDialog, { url });
+    await saveIntake(intakeDialog);
+    await intakeDialog.getByRole("alert").waitFor();
+    check(
+      `Unsafe or non-file source is rejected before save: ${url.split(":")[0]} ${new URL(url).hostname || "script"}`,
+      intakeWrites.length === validationWriteCount &&
+        (await intakeDialog
+          .getByRole("button", { name: "Save intake", exact: true })
+          .isEnabled()),
+    );
+  }
+  for (const [start, end] of [
+    ["1:20", "1:10"],
+    ["1:99", "2:00"],
+    ["1:00", ""],
+    ["-1", "2"],
+  ]) {
+    await fillIntake(intakeDialog, {
+      url: "https://youtu.be/FixtureAb12",
+      start,
+      end,
+    });
+    await saveIntake(intakeDialog);
+    await intakeDialog.getByRole("alert").waitFor();
+    check(
+      `Invalid source range ${start}–${end || "missing"} never creates intake`,
+      intakeWrites.length === validationWriteCount,
+    );
+  }
+  await fillIntake(intakeDialog, {
+    url: "https://youtu.be/FixtureAb12",
+    note: "Fictional first source",
+  });
+  await intakeDialog
+    .getByRole("button", { name: "Close intake", exact: true })
+    .click();
+  intakeDialog = await openIntake();
+  check(
+    "Closing and reopening intake preserves the unsaved source draft",
+    (await intakeDialog.getByLabel(/^Why it matters/).inputValue()) ===
+      "Fictional first source" && intakeWrites.length === validationWriteCount,
+  );
+  await page.reload();
+  intakeDialog = await openIntake();
+  check(
+    "Unsaved manual intake draft survives page refresh with its episode assignment",
+    (await intakeDialog
+      .getByLabel("Source URL or private Drive link", { exact: true })
+      .inputValue()) === "https://youtu.be/FixtureAb12" &&
+      (await intakeDialog.getByLabel(/^Episode assignment/).inputValue()) ===
+        "ep-127" &&
+      (await intakeDialog.getByLabel(/^Why it matters/).inputValue()) ===
+        "Fictional first source" &&
+      intakeWrites.length === validationWriteCount,
+  );
+  // Establish history entries in the current document after reload. Otherwise
+  // Back could leave the document entirely instead of testing its popstate guard.
+  await intakeDialog
+    .getByRole("button", { name: "Close intake", exact: true })
+    .click();
+  await chooseWorkspace("ep-126");
+  await previousClip.waitFor();
+  await chooseWorkspace("ep-127");
+  await page
+    .getByRole("heading", { name: "No reviewable clips yet", exact: true })
+    .waitFor();
+  intakeDialog = await openIntake();
+  intakeSaveMode = "hold";
+  await intakeDialog
+    .getByRole("button", { name: "Save intake", exact: true })
+    .evaluate((button) => {
+      button.click();
+      button.click();
+    });
+  await waitUntil(
+    () => heldIntakeWrites.length === 1,
+    "single held intake submission",
+  );
+  check(
+    "Repeated intake clicks create one request and lock the in-flight form",
+    intakeWrites.length === validationWriteCount + 1 &&
+      (await intakeDialog
+        .getByRole("button", { name: "Saving…", exact: true })
+        .isDisabled()) &&
+      (await intakeDialog
+        .getByRole("button", { name: "Close intake", exact: true })
+        .isDisabled()) &&
+      (await episodePicker.isDisabled()),
+  );
+  await page.goBack();
+  await page.waitForTimeout(100);
+  check(
+    "Browser Back during intake save retains its exact episode and source request",
+    new URL(page.url()).searchParams.get("episode") === "ep-127" &&
+      (await episodePicker.inputValue()) === "ep-127" &&
+      (await intakeDialog.getByLabel(/^Why it matters/).inputValue()) ===
+        "Fictional first source" &&
+      intakeWrites.length === validationWriteCount + 1,
+  );
+  intakeSaveMode = "success";
+  await releaseResponses(heldIntakeWrites);
+  await page.locator(".intake-card").waitFor();
+  const firstWrite = intakeWrites[validationWriteCount];
+  check(
+    "Manual source saves with CSRF, source-relative milliseconds and an operation key",
+    firstWrite.csrf === "fixture" &&
+      firstWrite.input.episodeId === "ep-127" &&
+      firstWrite.input.kind === "full_source" &&
+      firstWrite.input.inMs === 62500 &&
+      firstWrite.input.outMs === 72500 &&
+      firstWrite.input.expectedRevision === 0 &&
+      typeof firstWrite.input.idempotencyKey === "string",
+  );
+  check(
+    "Saved intake is Added by you and awaiting processing, never a playable or ready clip",
+    (await page
+      .locator(".manual-intake")
+      .getByRole("heading", { name: /^Added by you/ })
+      .isVisible()) &&
+      (await page
+        .locator(".intake-card")
+        .getByText("Saved · awaiting processing", { exact: true })
+        .isVisible()) &&
+      (await page
+        .locator(".manual-intake")
+        .getByText(/No processor is connected yet\. Saved submissions/)
+        .isVisible()) &&
+      (await page.locator(".clip-row,video").count()) === 0 &&
+      !(await page
+        .locator(".intake-card")
+        .getByText("Ready for review", { exact: true })
+        .count()),
+  );
+  await pollCatalog();
+  check(
+    "Intake-only version changes do not invent new rendered clips",
+    (await page.locator(".catalog-update-banner").count()) === 0 &&
+      intakeEpisodes[0].catalogVersion === 1 &&
+      (await page.locator(".clip-row").count()) === 0,
+  );
+  await capture("manual-intake-pending");
+
+  intakeDialog = await openIntake();
+  await fillIntake(intakeDialog, {
+    url: "https://www.youtube.com/watch?v=FixtureAb12&utm_source=fixture",
+  });
+  await saveIntake(intakeDialog);
+  await intakeDialog
+    .getByRole("button", { name: "Open existing", exact: true })
+    .waitFor();
+  check(
+    "Canonical duplicate offers Open existing without creating a second submission",
+    manualIntake.length === 1 &&
+      (await page.locator(".intake-card").count()) === 1,
+  );
+  await intakeDialog
+    .getByRole("button", { name: "Open existing", exact: true })
+    .click();
+  const editDialog = page.getByRole("dialog", {
+    name: "Edit your submission",
+    exact: true,
+  });
+  await editDialog.waitFor();
+  check(
+    "Open existing shows the exact saved intake",
+    (await editDialog.getByLabel(/^Why it matters/).inputValue()) ===
+      "Fictional first source" &&
+      (await editDialog
+        .getByLabel("Source URL or private Drive link", { exact: true })
+        .isDisabled()),
+  );
+  await editDialog
+    .getByRole("button", { name: "Close intake", exact: true })
+    .click();
+  intakeDialog = await openIntake();
+  await fillIntake(intakeDialog, { url: "https://youtu.be/FixtureAb12" });
+  await saveIntake(intakeDialog);
+  await intakeDialog
+    .getByRole("button", { name: "Different cut", exact: true })
+    .click();
+  check(
+    "Different cut requires changed source times for an identical range",
+    manualIntake.length === 1 &&
+      (await intakeDialog
+        .getByRole("alert")
+        .getByText(/Change the start and end times/)
+        .isVisible()),
+  );
+  await intakeDialog.getByLabel(/^Start time/).fill("1:13");
+  await intakeDialog.getByLabel(/^End time/).fill("1:23");
+  await saveIntake(intakeDialog);
+  await intakeDialog
+    .getByRole("button", { name: "Different cut", exact: true })
+    .click();
+  await intakeDialog.waitFor({ state: "hidden" });
+  check(
+    "A deliberately confirmed different cut saves a distinct range",
+    manualIntake.length === 2 &&
+      intakeWrites.at(-1).input.allowDifferentRange === true &&
+      manualIntake[1].inMs === 73000 &&
+      manualIntake[1].outMs === 83000,
+  );
+
+  intakeDialog = await openIntake();
+  await fillIntake(intakeDialog, {
+    url: "https://example.com/synthetic-uncertain",
+    kind: "already_cut",
+    start: "",
+    end: "",
+    note: "Keep exact uncertain request",
+  });
+  intakeSaveMode = "uncertain";
+  await saveIntake(intakeDialog);
+  await intakeDialog
+    .getByRole("button", { name: "Retry confirmation", exact: true })
+    .waitFor();
+  const uncertainWrite = intakeWrites.at(-1);
+  check(
+    "Unconfirmed save checks its operation receipt and retains a locked editable-payload draft",
+    operationReads.includes(uncertainWrite.input.idempotencyKey) &&
+      (await intakeDialog.getByLabel(/^Why it matters/).inputValue()) ===
+        "Keep exact uncertain request" &&
+      (await intakeDialog.getByLabel(/^Why it matters/).isDisabled()) &&
+      (await intakeDialog
+        .getByRole("button", { name: "Close intake", exact: true })
+        .isDisabled()),
+  );
+  await page.reload();
+  intakeDialog = page.getByRole("dialog", {
+    name: "Add to your slate",
+    exact: true,
+  });
+  await intakeDialog
+    .getByRole("button", { name: "Retry confirmation", exact: true })
+    .waitFor();
+  intakeSaveMode = "success";
+  await intakeDialog
+    .getByRole("button", { name: "Retry confirmation", exact: true })
+    .click();
+  await intakeDialog.waitFor({ state: "hidden" });
+  check(
+    "Retry after reload reuses the exact request key and payload",
+    JSON.stringify(intakeWrites.at(-1).input) ===
+      JSON.stringify(uncertainWrite.input) && manualIntake.length === 3,
+  );
+  intakeDialog = await openIntake();
+  await fillIntake(intakeDialog, {
+    url: "https://example.com/synthetic-committed",
+    start: "",
+    end: "",
+  });
+  const beforeCommitted = intakeWrites.length;
+  intakeSaveMode = "committed-uncertain";
+  await saveIntake(intakeDialog);
+  await intakeDialog.waitFor({ state: "hidden" });
+  check(
+    "A committed save with a lost response reconciles its receipt without a second submission",
+    intakeWrites.length === beforeCommitted + 1 &&
+      manualIntake.length === 4 &&
+      operationReads.at(-1) === intakeWrites.at(-1).input.idempotencyKey,
+  );
+  intakeSaveMode = "success";
+
+  holdIntakeReads = true;
+  await refreshSlate();
+  await waitUntil(
+    () => heldIntakeResponses.length === 1,
+    "old intake snapshot before newer navigation and save",
+  );
+  holdIntakeReads = false;
+  await chooseWorkspace("ep-126");
+  await previousClip.waitFor();
+  check(
+    "Episode-specific pending submissions do not leak into another slate",
+    (await page.locator(".intake-card").count()) === 0,
+  );
+  intakeDialog = await openIntake();
+  await fillIntake(intakeDialog, {
+    url: "https://example.com/synthetic-newer-save",
+    start: "",
+    end: "",
+    note: "New save wins over an old snapshot",
+  });
+  await saveIntake(intakeDialog);
+  await intakeDialog.waitFor({ state: "hidden" });
+  await releaseResponses(heldIntakeResponses);
+  check(
+    "Old intake response cannot erase a newer save or switch its episode",
+    (await episodePicker.inputValue()) === "ep-126" &&
+      (await page
+        .locator(".intake-card")
+        .getByText("New save wins over an old snapshot", { exact: true })
+        .isVisible()) &&
+      (await page.locator(".clip-row").count()) === 2,
+  );
+  intakeDialog = await openIntake();
+  await fillIntake(intakeDialog, {
+    url: "https://example.com/synthetic-unassigned",
+    start: "",
+    end: "",
+    note: "Fictional unassigned source",
+  });
+  await intakeDialog.getByLabel(/^Episode assignment/).selectOption("");
+  check(
+    "Unassigned intake cannot expose an unrelated episode upload folder",
+    (await intakeDialog
+      .getByRole("link", { name: /Open private episode upload folder/ })
+      .count()) === 0,
+  );
+  await saveIntake(intakeDialog);
+  await intakeDialog.waitFor({ state: "hidden" });
+  check(
+    "Unassigned intake is saved separately from the episode queue",
+    intakeWrites.at(-1).input.episodeId === null &&
+      (await page.locator(".unassigned-intakes .intake-card").count()) === 1 &&
+      (await page.locator(".clip-row").count()) === 2,
+  );
+  await chooseWorkspace("ep-127");
+  await page
+    .getByRole("heading", { name: "No reviewable clips yet", exact: true })
+    .waitFor();
+  intakeEpisodes[0].uploadFolderUrl =
+    "https://drive.google.com.evil.example/drive/folders/fictional-folder";
+  await refreshSlate();
+  await page
+    .getByRole("button", { name: "Cancel refresh", exact: true })
+    .waitFor({ state: "hidden" });
+  intakeDialog = await openIntake();
+  check(
+    "An untrusted upload-folder host is not rendered as a link",
+    (await intakeDialog
+      .getByRole("link", { name: /Open private episode upload folder/ })
+      .count()) === 0 &&
+      (await intakeDialog
+        .getByText(/No private upload folder is configured/)
+        .isVisible()),
+  );
+  await intakeDialog
+    .getByRole("button", { name: "Close intake", exact: true })
+    .click();
+
+  // An exact duplicate must win even when the server lists a different cut
+  // first. All duplicate IDs still refer only to synthetic records.
+  intakeDialog = await openIntake();
+  await fillIntake(intakeDialog, {
+    url: "https://example.com/synthetic-duplicate-order",
+    start: "",
+    end: "",
+  });
+  nextIntakeDuplicateMatches = [
+    {
+      kind: "intake",
+      id: manualIntake[1].id,
+      episodeId: "ep-127",
+      rangeMatch: "different",
+    },
+    {
+      kind: "intake",
+      id: manualIntake[0].id,
+      episodeId: "ep-127",
+      rangeMatch: "exact",
+    },
+  ];
+  await saveIntake(intakeDialog);
+  await intakeDialog
+    .getByRole("button", { name: "Open existing", exact: true })
+    .click();
+  await editDialog.waitFor();
+  check(
+    "Open existing prefers an exact duplicate over an earlier different-range match",
+    (await editDialog.getByLabel(/^Why it matters/).inputValue()) ===
+      "Fictional first source",
+  );
+
+  await editDialog
+    .getByLabel(/^Why it matters/)
+    .fill("Old edit draft retains revision one");
+  await editDialog
+    .getByRole("button", { name: "Close intake", exact: true })
+    .click();
+  const editedFixture = manualIntake[0];
+  editedFixture.revision += 1;
+  editedFixture.whyItMatters = "Newer synthetic server note must win";
+  intakeVersion += 1;
+  await page.reload();
+  await page
+    .locator(`#intake-${editedFixture.id}`)
+    .getByRole("button", { name: "Edit intake", exact: true })
+    .click();
+  await editDialog.waitFor();
+  check(
+    "An edit draft survives reload without adopting a newer server revision",
+    (await editDialog.getByLabel(/^Why it matters/).inputValue()) ===
+      "Old edit draft retains revision one",
+  );
+  await editDialog
+    .getByRole("button", { name: "Save changes", exact: true })
+    .click();
+  await editDialog
+    .getByRole("alert")
+    .filter({ hasText: "This submission changed elsewhere." })
+    .waitFor();
+  check(
+    "A stale edit sends its original revision and receives conflict instead of overwriting",
+    intakeWrites.at(-1).path === `/api/intake/${editedFixture.id}` &&
+      intakeWrites.at(-1).input.expectedRevision === 1 &&
+      editedFixture.revision === 2 &&
+      editedFixture.whyItMatters === "Newer synthetic server note must win" &&
+      (await editDialog
+        .getByRole("button", { name: "Save changes", exact: true })
+        .isDisabled()),
+  );
+  await editDialog
+    .getByRole("button", { name: "Close intake", exact: true })
+    .click();
+
+  const restoredFixture = manualIntake[1];
+  await page
+    .locator(`#intake-${restoredFixture.id}`)
+    .getByRole("button", { name: "Edit intake", exact: true })
+    .click();
+  await editDialog
+    .getByRole("button", { name: "Cancel intake", exact: true })
+    .click();
+  await editDialog
+    .getByRole("button", { name: "Confirm cancel", exact: true })
+    .click();
+  await editDialog.waitFor({ state: "hidden" });
+  const cancelledIntakes = page.locator("details.cancelled-intakes");
+  await cancelledIntakes.locator("summary").click();
+  await cancelledIntakes
+    .locator(`#intake-${restoredFixture.id}`)
+    .getByRole("button", { name: "View cancelled intake", exact: true })
+    .click();
+  await editDialog
+    .getByRole("button", { name: "Restore intake", exact: true })
+    .click();
+  await editDialog
+    .getByRole("button", { name: "Different cut", exact: true })
+    .waitFor();
+  const rejectedRestore = intakeWrites.at(-1);
+  await editDialog
+    .getByRole("button", { name: "Different cut", exact: true })
+    .click();
+  await editDialog.waitFor({ state: "hidden" });
+  check(
+    "Different-range confirmation preserves a cancelled submission's restore action",
+    rejectedRestore.input.action === "restore" &&
+      intakeWrites.at(-1).input.action === "restore" &&
+      intakeWrites.at(-1).input.allowDifferentRange === true &&
+      intakeWrites.at(-1).path === rejectedRestore.path &&
+      intakeWrites.at(-1).input.idempotencyKey !==
+        rejectedRestore.input.idempotencyKey &&
+      restoredFixture.status === "awaiting_processing" &&
+      restoredFixture.revision === 3,
+  );
+
+  intakeDialog = await openIntake();
+  await fillIntake(intakeDialog, {
+    url: "https://example.com/synthetic-old-render-intent",
+    start: "",
+    end: "",
+  });
+  nextIntakeDuplicateMatches = [
+    {
+      kind: "render",
+      id: "c126a-v1",
+      episodeId: "ep-126",
+      rangeMatch: "exact",
+    },
+  ];
+  await saveIntake(intakeDialog);
+  heldWorkspaceId = "ep-126";
+  await intakeDialog
+    .getByRole("button", { name: "Open existing", exact: true })
+    .click();
+  await waitUntil(
+    () => heldWorkspaceResponses.length === 1,
+    "duplicate render's old episode request",
+  );
+  await chooseWorkspace("ep-127");
+  await page
+    .getByRole("heading", { name: "No reviewable clips yet", exact: true })
+    .waitFor();
+  heldWorkspaceId = null;
+  await releaseResponses(heldWorkspaceResponses);
+  await chooseWorkspace("ep-126");
+  await previousClip.waitFor();
+  await page.waitForTimeout(150);
+  check(
+    "Later episode navigation clears an older duplicate-render open intent",
+    (await episodePicker.isVisible()) &&
+      (await episodePicker.inputValue()) === "ep-126" &&
+      new URL(page.url()).hash === "" &&
+      (await page.locator("#review-note,video").count()) === 0 &&
+      (await page.locator(".clip-row").count()) === 2,
+  );
+  check(
+    "All manual intake fixture flows avoid provider fetches and production imports",
+    externalRequests.length === 0 && imports.length === automaticImportStart,
+  );
+  await capture("episode-manual-intake-slate");
+
   // Additional visual-only evidence: the app's built-in five-record fictional demo.
   // This does not replace API/media fixture checks or establish live integration.
   const demoUrl = new URL(
@@ -1334,8 +2369,13 @@ try {
 }
 holdStatusResponses = false;
 holdEpisodeResponses = false;
+heldWorkspaceId = null;
+holdIntakeReads = false;
 await releaseResponses(heldStatusResponses);
 await releaseResponses(heldEpisodeResponses);
+await releaseResponses(heldWorkspaceResponses);
+await releaseResponses(heldIntakeResponses);
+await releaseResponses(heldIntakeWrites);
 await mkdir("test-results", { recursive: true });
 await writeFile(
   "test-results/browser-regression.json",

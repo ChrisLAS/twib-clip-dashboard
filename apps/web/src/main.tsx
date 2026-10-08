@@ -27,7 +27,10 @@ import {
 import type {
   Clip,
   Decision,
+  Episode,
   EpisodeDetail,
+  IntakeMutationResult,
+  ManualIntake,
   Review,
   Session,
 } from "@twib/shared";
@@ -40,6 +43,13 @@ import { ImportControl } from "./import-control";
 import { ClipThumbnail } from "./clip-thumbnail";
 import { CatalogSyncNotice } from "./catalog-sync-notice";
 import { preserveNewerReviews, SlateRequestGate } from "./catalog-sync";
+import {
+  chooseEpisode,
+  episodeUrl,
+  requestedEpisode,
+} from "./episode-selection";
+import { ManualIntakePanel } from "./manual-intake";
+import { pendingIntakes, preserveIntakes } from "./intake-state";
 const labels: Record<Decision, string> = {
   up: "Approved",
   down: "Rejected",
@@ -54,6 +64,23 @@ function App() {
     [session, setSession] = useState<Session | null>(null),
     [loading, setLoading] = useState(true),
     [error, setError] = useState("");
+  const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const [episodeId, setEpisodeId] = useState<string | null>(() =>
+    requestedEpisode(location.href),
+  );
+  const episodeIdRef = useRef(episodeId);
+  const [intakes, setIntakes] = useState<ManualIntake[]>([]);
+  const [intakeVersion, setIntakeVersion] = useState(0);
+  const intakeVersionRef = useRef(0);
+  const openingRender = useRef<{ episodeId: string; renderId: string } | null>(
+    null,
+  );
+  const openingHistory = useRef<{
+    episodeId: string;
+    clipId: string;
+    renderId?: string;
+  } | null>(null);
+  const loadRef = useRef<(id?: string | null) => Promise<void>>(async () => {});
   const [selected, setSelected] = useState<string | null>(null),
     [filter, setFilter] = useState("All clips"),
     [query, setQuery] = useState(""),
@@ -84,7 +111,7 @@ function App() {
     slateRequests.current.cancel();
     setLoading(false);
   }
-  async function load() {
+  async function load(requestedId = episodeIdRef.current) {
     // A catalog refresh never swaps the render underneath an active review.
     if (selectedRef.current || mutationLock.current) return;
     const controller = slateRequests.current.begin();
@@ -100,9 +127,11 @@ function App() {
     try {
       if (isLocalDemo) {
         if (!isCurrent()) return;
-        setEpisode((previous) =>
-          canApply() ? (previous ?? structuredClone(demoEpisode)) : previous,
-        );
+        const next = structuredClone(demoEpisode);
+        episodeIdRef.current = next.id;
+        setEpisodeId(next.id);
+        setEpisodes([next]);
+        setEpisode((previous) => (canApply() ? (previous ?? next) : previous));
         setSession((previous) =>
           canApply()
             ? {
@@ -119,10 +148,17 @@ function App() {
         setSession((previous) => (canApply() ? s : previous));
         const eps = await api.episodes(controller.signal);
         if (!isCurrent()) return;
-        const next = eps.length
-          ? await api.episode(eps[0].id, controller.signal)
-          : null;
-        if (!isCurrent()) return;
+        setEpisodes((previous) => (canApply() ? eps : previous));
+        const choice = chooseEpisode(eps, requestedId);
+        episodeIdRef.current = choice?.id ?? null;
+        setEpisodeId(choice?.id ?? null);
+        const [next, intake] = await Promise.all([
+          choice
+            ? api.episode(choice.id, controller.signal)
+            : Promise.resolve(null),
+          api.intakes(controller.signal),
+        ]);
+        if (!isCurrent() || (next && next.id !== choice?.id)) return;
         setEpisode((previous) =>
           canApply()
             ? next
@@ -130,30 +166,189 @@ function App() {
               : null
             : previous,
         );
+        if (intake.version >= intakeVersionRef.current) {
+          intakeVersionRef.current = intake.version;
+          setIntakeVersion((previous) =>
+            canApply() ? intake.version : previous,
+          );
+          setIntakes((previous) =>
+            canApply() ? preserveIntakes(previous, intake.items) : previous,
+          );
+        }
+        if (choice && openingHistory.current?.episodeId !== choice.id)
+          history.replaceState(
+            { episodeId: choice.id },
+            "",
+            episodeUrl(location.href, choice.id),
+          );
+        if (requestedId && choice?.id !== requestedId)
+          setNotice(
+            "That episode is unavailable. Showing the active workspace instead.",
+          );
       }
       setSlateRevision((revision) => (canApply() ? revision + 1 : revision));
     } catch (e) {
       if (isCurrent())
-        setError((previous) =>
-          canApply()
-            ? e instanceof Error
-              ? e.message
-              : "Unable to load the slate"
-            : previous,
-        );
+        setError(e instanceof Error ? e.message : "Unable to load the slate");
     } finally {
       if (slateRequests.current.finish(controller)) setLoading(false);
     }
   }
+  loadRef.current = load;
+  function changeEpisode(
+    id: string,
+    writeHistory = true,
+    preserveRenderIntent = false,
+  ) {
+    if (mutationLock.current) return;
+    if (!preserveRenderIntent) openingRender.current = null;
+    openingHistory.current = null;
+    cancelLoad();
+    selectedRef.current = null;
+    setSelected(null);
+    episodeIdRef.current = id;
+    setEpisodeId(id);
+    setEpisode(null);
+    setUndo(null);
+    setNotice("");
+    setSaveError("");
+    setFilter("All clips");
+    setQuery("");
+    if (writeHistory)
+      history.pushState({ episodeId: id }, "", episodeUrl(location.href, id));
+    void loadRef.current(id);
+  }
+  function intakeSaved(result: IntakeMutationResult) {
+    intakeVersionRef.current = Math.max(
+      intakeVersionRef.current,
+      result.intakeVersion,
+    );
+    setIntakeVersion(intakeVersionRef.current);
+    setIntakes((previous) => [
+      result.intake,
+      ...previous.filter((item) => item.id !== result.intake.id),
+    ]);
+  }
+  function openExistingRender(targetEpisode: string, renderId: string) {
+    const existing = episodeRef.current;
+    if (existing?.id === targetEpisode) {
+      const target = existing.clips.find((item) => item.render.id === renderId);
+      if (target) open(target);
+      else
+        setNotice(
+          "That source matches an older render. This slate shows current versions only; the matched historical render was not opened.",
+        );
+    } else {
+      openingRender.current = { episodeId: targetEpisode, renderId };
+      changeEpisode(targetEpisode, true, true);
+    }
+  }
+  useEffect(() => {
+    if (!episode || loading) return;
+    const restored = openingHistory.current;
+    if (restored?.episodeId === episode.id) {
+      openingHistory.current = null;
+      const target = episode.clips.find(
+        (item) =>
+          item.id === restored.clipId &&
+          (!restored.renderId || item.render.id === restored.renderId),
+      );
+      if (target) {
+        selectedRef.current = target.id;
+        setSelected(target.id);
+        setSaveError("");
+        history.replaceState(
+          {
+            episodeId: episode.id,
+            clipId: target.id,
+            renderId: target.render.id,
+          },
+          "",
+          episodeUrl(location.href, episode.id, target.id),
+        );
+        window.scrollTo(0, 0);
+      } else {
+        history.replaceState(
+          { episodeId: episode.id },
+          "",
+          episodeUrl(location.href, episode.id),
+        );
+        setNotice(
+          "That exact review version is no longer current. Your render-specific draft is kept; choose a clip to review its current version.",
+        );
+      }
+      return;
+    }
+    const requested = openingRender.current;
+    if (!requested || episode.id !== requested.episodeId) return;
+    openingRender.current = null;
+    const target = episode.clips.find(
+      (item) => item.render.id === requested.renderId,
+    );
+    if (target) open(target);
+    else
+      setNotice(
+        "That source matches an older render. This slate shows current versions only; the matched historical render was not opened.",
+      );
+  }, [episode, loading]);
   useEffect(() => {
     void load();
     return () => slateRequests.current.cancel();
   }, []);
   useEffect(() => {
     const fn = () => {
+      if (mutationLock.current) {
+        if (episodeIdRef.current)
+          history.replaceState(
+            {
+              episodeId: episodeIdRef.current,
+              clipId: selectedRef.current,
+              renderId: episodeRef.current?.clips.find(
+                (item) => item.id === selectedRef.current,
+              )?.render.id,
+            },
+            "",
+            episodeUrl(
+              location.href,
+              episodeIdRef.current,
+              selectedRef.current ?? undefined,
+            ),
+          );
+        return;
+      }
       cancelLoad();
+      openingRender.current = null;
+      openingHistory.current = null;
+      const requestedId =
+        requestedEpisode(location.href) ?? history.state?.episodeId;
+      if (
+        requestedId &&
+        (requestedId !== episodeIdRef.current || !episodeRef.current)
+      ) {
+        if (history.state?.clipId)
+          openingHistory.current = {
+            episodeId: requestedId,
+            clipId: history.state.clipId,
+            renderId: history.state.renderId,
+          };
+        selectedRef.current = null;
+        setSelected(null);
+        episodeIdRef.current = requestedId;
+        setEpisodeId(requestedId);
+        setEpisode(null);
+        setUndo(null);
+        setNotice("");
+        setSaveError("");
+        void loadRef.current(requestedId);
+        return;
+      }
       const requested = history.state?.clipId;
-      const id = episodeRef.current?.clips.some((clip) => clip.id === requested)
+      const id = episodeRef.current?.clips.some(
+        (clip) =>
+          clip.id === requested &&
+          (!history.state?.renderId ||
+            clip.render.id === history.state.renderId),
+      )
         ? (requested as string)
         : null;
       selectedRef.current = id;
@@ -168,6 +363,9 @@ function App() {
     return () => window.removeEventListener("popstate", fn);
   }, []);
   function open(clip: Clip) {
+    if (mutationLock.current) return;
+    openingRender.current = null;
+    openingHistory.current = null;
     cancelLoad();
     if (!selectedRef.current) {
       scroll.current = window.scrollY;
@@ -176,14 +374,26 @@ function App() {
     selectedRef.current = clip.id;
     setSelected(clip.id);
     setSaveError("");
-    history.pushState({ clipId: clip.id }, "", `#clip/${clip.id}`);
+    history.pushState(
+      { episodeId: clip.episodeId, clipId: clip.id, renderId: clip.render.id },
+      "",
+      episodeUrl(location.href, clip.episodeId, clip.id),
+    );
     window.scrollTo(0, 0);
   }
   function back() {
+    if (mutationLock.current) return;
+    openingRender.current = null;
+    openingHistory.current = null;
     cancelLoad();
     selectedRef.current = null;
     setSelected(null);
-    history.replaceState({}, "", location.pathname + location.search);
+    if (episodeIdRef.current)
+      history.replaceState(
+        { episodeId: episodeIdRef.current },
+        "",
+        episodeUrl(location.href, episodeIdRef.current),
+      );
     requestAnimationFrame(() => {
       if (selectedRef.current) return;
       window.scrollTo(0, scroll.current);
@@ -192,7 +402,7 @@ function App() {
   }
   function update(id: string, fn: (c: Clip) => Clip) {
     setEpisode((prev) =>
-      prev
+      prev && prev.id === episodeIdRef.current
         ? { ...prev, clips: prev.clips.map((c) => (c.id === id ? fn(c) : c)) }
         : prev,
     );
@@ -416,15 +626,47 @@ function App() {
         </aside>
       )}
       <main className={clip ? "review-main" : "slate-main"}>
+        {!clip && episodes.length > 0 && (
+          <div className="workspace-picker">
+            <label htmlFor="episode-picker">Episode</label>
+            <select
+              id="episode-picker"
+              value={episodeId ?? ""}
+              disabled={pending}
+              onChange={(event) => changeEpisode(event.target.value)}
+            >
+              {episodes.map((item) => (
+                <option key={item.id} value={item.id}>
+                  Episode {item.number} ·{" "}
+                  {item.status ?? (item.publishedGuid ? "published" : "draft")}
+                  {item.isActive ? " · active" : ""}
+                </option>
+              ))}
+            </select>
+            <span className="muted">
+              {episode?.isActive
+                ? "Active workspace"
+                : episode?.status === "published" || episode?.publishedGuid
+                  ? "Published episode"
+                  : "Episode workspace"}
+            </span>
+          </div>
+        )}
         {!demo && session && (
           <>
             <CatalogSyncNotice
+              key={episodeId ?? "empty"}
               episode={episode}
+              intakeVersion={intakeVersion}
               reviewing={!!clip}
               loading={loading}
               pending={pending}
               onApply={() => void load()}
-              onCancel={cancelLoad}
+              onCancel={() => {
+                openingRender.current = null;
+                openingHistory.current = null;
+                cancelLoad();
+              }}
               onBack={back}
             />
             <details className="sync-troubleshooting" hidden={!!clip}>
@@ -489,7 +731,9 @@ function App() {
         ) : !episode && !error ? (
           <div className="empty">
             <Film />
-            <h1>No episodes yet</h1>
+            <h1>
+              {episodes.length ? "Episode not loaded" : "No episodes yet"}
+            </h1>
             <p>
               Clips will appear after an authorized producer manifest is
               imported.
@@ -593,7 +837,7 @@ function App() {
                   <section className="metrics" aria-label="Episode summary">
                     <div>
                       <strong>{episode.clips.length}</strong>
-                      <span>candidate clips</span>
+                      <span>imported renders</span>
                     </div>
                     <div>
                       <strong>
@@ -617,6 +861,26 @@ function App() {
                       </strong>
                       <span>editorially approved</span>
                     </div>
+                    <div>
+                      <strong>
+                        {pendingIntakes(intakes, episode.id).length}
+                      </strong>
+                      <span>pending intake</span>
+                    </div>
+                    <div>
+                      <strong>
+                        {
+                          episode.clips.filter(
+                            (item) =>
+                              item.production.state === "ready" &&
+                              !item.production.blocker &&
+                              !item.production.stale &&
+                              item.render.mediaAvailable,
+                          ).length
+                        }
+                      </strong>
+                      <span>ready for review</span>
+                    </div>
                     <div className="last-update">
                       <Clock3 size={18} />
                       <span>
@@ -635,6 +899,22 @@ function App() {
                       </span>
                     </div>
                   </section>
+                  <ManualIntakePanel
+                    episodes={episodes}
+                    episodeId={episode.id}
+                    items={intakes}
+                    csrf={session?.csrfToken ?? ""}
+                    demo={!!demo}
+                    hidden={false}
+                    disabled={pending}
+                    onBusy={(busy) => {
+                      if (busy) cancelLoad();
+                      mutationLock.current = busy;
+                      setPending(busy);
+                    }}
+                    onSaved={intakeSaved}
+                    onOpenRender={openExistingRender}
+                  />
                   <div
                     className="tabs"
                     role="group"
@@ -777,12 +1057,12 @@ function App() {
                       <h2>
                         {episode.clips.length
                           ? "No clips match this view"
-                          : "No clips yet"}
+                          : "No reviewable clips yet"}
                       </h2>
                       <p>
                         {episode.clips.length
                           ? "Try another search or clear your filters."
-                          : "This episode has no imported renders."}
+                          : "Saved manual submissions appear above. Reviewable clips will appear here after a verified render is imported."}
                       </p>
                       <button
                         onClick={() => {

@@ -1,3 +1,5 @@
+export * from "./intake";
+import type { IntakeDuplicateMatch } from "./intake";
 export type Decision = "up" | "down" | "defer" | "clear";
 export type QAResult = "passed" | "failed" | "unknown";
 export type ProductionState =
@@ -97,9 +99,16 @@ export interface Episode {
   subtitle: string;
   clipCount: number;
   publishedGuid: string | null;
+  status?: "draft" | "published" | "archived";
+  isActive?: boolean;
+  workspaceRevision?: number;
+  uploadFolderUrl?: string | null;
+  intakeCount?: number;
 }
 export interface EpisodeDetail extends Episode {
   catalogVersion: number;
+  intakeVersion?: number;
+  workspaceVersion?: number;
   clips: Clip[];
   sync: { lastSuccessAt: string | null; lastError: string | null };
   observedAt: string;
@@ -133,12 +142,14 @@ export interface VisibilityInput {
 export interface Session {
   csrfToken: string;
   mode: "demo" | "production";
-  integrations: { drive: boolean; producer: boolean };
+  integrations: { drive: boolean; producer: boolean; intakeProducer?: boolean };
   owner: string;
 }
 export interface ApiError {
   error: { code: string; message: string };
   currentRevision?: number;
+  existingIntakeIds?: string[];
+  duplicateMatches?: IntakeDuplicateMatch[];
 }
 
 export interface CatalogClipRevision {
@@ -157,6 +168,8 @@ export interface CatalogSyncState {
   intervalSeconds: number;
 }
 export interface CatalogStatus {
+  intakeVersion?: number;
+  workspaceVersion?: number;
   complete: boolean;
   version: number;
   observedAt: string;

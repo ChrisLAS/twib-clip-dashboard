@@ -1,5 +1,10 @@
 import type {
+  ApiError,
   CatalogStatus,
+  IntakeCreateInput,
+  IntakeUpdateInput,
+  IntakeList,
+  IntakeMutationResult,
   Episode,
   EpisodeDetail,
   Session,
@@ -11,6 +16,7 @@ export class RequestError extends Error {
   constructor(
     message: string,
     public status: number,
+    public details?: ApiError,
   ) {
     super(message);
   }
@@ -35,7 +41,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         message = detail.message;
       }
     }
-    throw new RequestError(message, r.status);
+    throw new RequestError(message, r.status, payload as ApiError | undefined);
   }
   return r.json();
 }
@@ -73,6 +79,12 @@ export const api = {
       `/api/episodes/${encodeURIComponent(id)}`,
       readOptions(signal),
     ),
+  intakes: (signal?: AbortSignal) =>
+    request<IntakeList>("/api/intake", readOptions(signal)),
+  createIntake: (body: IntakeCreateInput, csrf: string) =>
+    mutateIntake("/api/intake", body, csrf),
+  updateIntake: (id: string, body: IntakeUpdateInput, csrf: string) =>
+    mutateIntake(`/api/intake/${encodeURIComponent(id)}`, body, csrf),
   review: (id: string, body: ReviewInput, csrf: string) =>
     mutate<Review>(
       `/api/renders/${encodeURIComponent(id)}/reviews`,
@@ -134,4 +146,33 @@ export function date(value: string | null) {
         timeZone: "UTC",
       })
     : "Unknown";
+}
+
+export class UncertainIntakeError extends Error {}
+
+/** Callers retain the exact request/key until this operation is confirmed. */
+async function mutateIntake(
+  path: string,
+  body: IntakeCreateInput | IntakeUpdateInput,
+  csrf: string,
+): Promise<IntakeMutationResult> {
+  try {
+    return await request<IntakeMutationResult>(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    if (error instanceof RequestError && error.status < 500) throw error;
+    try {
+      return await request<IntakeMutationResult>(
+        `/api/operations/${encodeURIComponent(body.idempotencyKey)}`,
+        readOptions(),
+      );
+    } catch {
+      throw new UncertainIntakeError(
+        "The save could not be confirmed. Your exact request is kept. Retry confirmation to safely reuse the same request key.",
+      );
+    }
+  }
 }

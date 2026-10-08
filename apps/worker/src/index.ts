@@ -15,6 +15,12 @@ import { googleConfigured } from "./google";
 import { pullManifest } from "./importer";
 import { seedDemo } from "./fixtures";
 import { catalogStatus } from "./catalog";
+import {
+  listIntake,
+  mutateIntake,
+  intakeCreateSchema,
+  intakeUpdateSchema,
+} from "./intake";
 const common = {
   expectedRevision: z.number().int().nonnegative(),
   idempotencyKey: z
@@ -80,14 +86,56 @@ export default {
           integrations: {
             drive: googleConfigured(env),
             producer: !!env.PRODUCER_SHEET_ID,
+            intakeProducer: false,
           },
         });
       else if (path === "/api/catalog/status" && method === "GET")
         result = json(await catalogStatus(env));
       else if (path === "/api/episodes" && method === "GET")
-        result = json(await listEpisodes(env.DB));
+        result = json(await listEpisodes(env.DB, owner));
       else if (/^\/api\/episodes\/[\w-]+$/.test(path) && method === "GET")
-        result = json(await getEpisode(env.DB, path.split("/")[3]));
+        result = json(await getEpisode(env.DB, path.split("/")[3], owner));
+      else if (path === "/api/intake" && method === "GET") {
+        const episodeId = url.searchParams.get("episodeId");
+        if (
+          episodeId !== null &&
+          episodeId !== "unassigned" &&
+          !/^[a-zA-Z0-9_-]{1,120}$/.test(episodeId)
+        )
+          throw new HttpError(
+            422,
+            "INVALID_EPISODE",
+            "Choose a valid episode.",
+          );
+        result = json(
+          await listIntake(
+            env.DB,
+            owner,
+            episodeId === null
+              ? undefined
+              : episodeId === "unassigned"
+                ? null
+                : episodeId,
+          ),
+        );
+      } else if (path === "/api/intake" && method === "POST")
+        result = json(
+          await mutateIntake(
+            env.DB,
+            null,
+            intakeCreateSchema.parse(await body(request)),
+            owner,
+          ),
+        );
+      else if (/^\/api\/intake\/[\w-]+$/.test(path) && method === "POST")
+        result = json(
+          await mutateIntake(
+            env.DB,
+            path.split("/")[3],
+            intakeUpdateSchema.parse(await body(request)),
+            owner,
+          ),
+        );
       else if (/^\/api\/renders\/[\w-]+$/.test(path) && method === "GET")
         result = json(await getRender(env.DB, path.split("/")[3]));
       else if (
@@ -117,7 +165,7 @@ export default {
           ),
         );
       else if (/^\/api\/operations\/[\w-]+$/.test(path) && method === "GET") {
-        const op = await operation(env.DB, path.split("/")[3]);
+        const op = await operation(env.DB, path.split("/")[3], owner);
         if (!op)
           throw new HttpError(
             404,
@@ -166,6 +214,14 @@ export default {
         return json(
           {
             error: { code: e.code, message: e.message },
+            ...(e.duplicateMatches
+              ? {
+                  duplicateMatches: e.duplicateMatches,
+                  existingIntakeIds: e.duplicateMatches
+                    .filter((match) => match.kind === "intake")
+                    .map((match) => match.id),
+                }
+              : {}),
             ...(e.currentRevision !== undefined
               ? { currentRevision: e.currentRevision }
               : {}),

@@ -58,6 +58,15 @@ beforeEach(async () => {
       "utf8",
     ),
   );
+  sqlite.exec(
+    readFileSync(
+      new URL(
+        "../migrations/0004_episode_workspaces_intake.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
   db = {
     prepare: (sql: string) => new Statement(sqlite, sql),
     batch: async (statements: Statement[]) => {

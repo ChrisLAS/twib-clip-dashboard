@@ -33,11 +33,17 @@ export async function catalogStatus(env: Env): Promise<CatalogStatus> {
   // One statement gives status and index the same SQLite snapshot; it reads no
   // Google data, transcript bodies, review notes, or media metadata.
   const row = await env.DB.prepare(
-    `SELECT sync_state.*, COALESCE((SELECT json_group_array(json_object(
+    `SELECT sync_state.*, (SELECT intake_version FROM workspace_state WHERE id=1) AS intake_version, (SELECT version FROM workspace_state WHERE id=1) AS workspace_version, COALESCE((SELECT json_group_array(json_object(
     'id',id,'episodeId',episode_id,'revision',catalog_revision,
     'currentRenderId',json_extract(data,'$.currentRenderId'))) FROM (SELECT id,episode_id,catalog_revision,data FROM clips ORDER BY id LIMIT 1001)),'[]') AS clips
     FROM sync_state WHERE id=1`,
-  ).first<SyncState & { clips: string }>();
+  ).first<
+    SyncState & {
+      clips: string;
+      intake_version: number;
+      workspace_version: number;
+    }
+  >();
   if (!row)
     throw new HttpError(
       503,
@@ -51,6 +57,8 @@ export async function catalogStatus(env: Env): Promise<CatalogStatus> {
   return {
     complete: clips.length <= 1000,
     version: row.version,
+    intakeVersion: row.intake_version,
+    workspaceVersion: row.workspace_version,
     observedAt: new Date(now).toISOString(),
     sync: {
       configured: catalogConfigured(env),

@@ -10,6 +10,7 @@ import type {
   Review,
 } from "@twib/shared";
 import { HttpError } from "./errors";
+import { workspaceEpisodes } from "./workspaces";
 interface Row {
   id: string;
   catalog_revision: number;
@@ -103,28 +104,28 @@ export async function getRender(db: D1Database, id: string): Promise<Render> {
       : null,
   };
 }
-export async function listEpisodes(db: D1Database): Promise<Episode[]> {
-  const r = await db
-    .prepare(
-      "SELECT data,(SELECT count(*) FROM clips WHERE episode_id=episodes.id) AS clip_count FROM episodes ORDER BY id DESC",
-    )
-    .all<{ data: string; clip_count: number }>();
-  return r.results.map((v) => ({
-    ...JSON.parse(v.data),
-    clipCount: v.clip_count,
-  }));
+export async function listEpisodes(
+  db: D1Database,
+  owner?: string,
+): Promise<Episode[]> {
+  return workspaceEpisodes(db, owner);
 }
 export async function getEpisode(
   db: D1Database,
   id: string,
+  owner?: string,
 ): Promise<EpisodeDetail> {
-  const row = await db
+  const metadata = (await workspaceEpisodes(db, owner, id))[0];
+  if (!metadata) throw new HttpError(404, "NOT_FOUND", "Episode not found.");
+  const clock = await db
     .prepare(
-      "SELECT data,(SELECT version FROM sync_state WHERE id=1) AS catalog_version FROM episodes WHERE id=?",
+      "SELECT sync_state.version AS catalog_version,workspace_state.version AS workspace_version,workspace_state.intake_version FROM sync_state CROSS JOIN workspace_state WHERE sync_state.id=1 AND workspace_state.id=1",
     )
-    .bind(id)
-    .first<{ data: string; catalog_version: number }>();
-  if (!row) throw new HttpError(404, "NOT_FOUND", "Episode not found.");
+    .first<{
+      catalog_version: number;
+      workspace_version: number;
+      intake_version: number;
+    }>();
   const rows = await db
     .prepare(
       "SELECT clips.*,sync_state.version AS catalog_version FROM clips CROSS JOIN sync_state WHERE episode_id=? AND sync_state.id=1 ORDER BY clips.id",
@@ -172,11 +173,13 @@ export async function getEpisode(
     .prepare("SELECT * FROM sync_state WHERE id=1")
     .first<{ last_success_at: string | null; last_error: string | null }>();
   return {
-    ...JSON.parse(row.data),
+    ...metadata,
     clips,
     clipCount: clips.length,
     catalogVersion:
-      rows.results[0]?.catalog_version ?? row.catalog_version ?? 0,
+      rows.results[0]?.catalog_version ?? clock?.catalog_version ?? 0,
+    intakeVersion: clock?.intake_version ?? 0,
+    workspaceVersion: clock?.workspace_version ?? 0,
     observedAt: new Date().toISOString(),
     sync: {
       lastSuccessAt: sync?.last_success_at ?? null,
@@ -187,13 +190,16 @@ export async function getEpisode(
 export async function operation(
   db: D1Database,
   key: string,
+  owner?: string,
 ): Promise<{ fingerprint: string; response: string } | null> {
   return db
-    .prepare("SELECT fingerprint,response FROM operations WHERE id=?")
-    .bind(key)
+    .prepare(
+      "SELECT fingerprint,response FROM operations LEFT JOIN operation_owners ON operation_owners.operation_id=operations.id WHERE operations.id=? AND (? IS NULL OR operation_owners.owner IS NULL OR operation_owners.owner=?)",
+    )
+    .bind(key, owner ?? null, owner ?? null)
     .first();
 }
-async function fingerprint(value: unknown): Promise<string> {
+export async function fingerprint(value: unknown): Promise<string> {
   const b = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(JSON.stringify(value)),

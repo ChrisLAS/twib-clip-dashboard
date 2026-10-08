@@ -129,16 +129,36 @@ describe("Readiness projection", () => {
                     : null
                   : null,
           all: async () => ({
-            results: sql.includes("FROM clips")
+            results: sql.includes("AS imported_data")
               ? [
                   {
-                    data: JSON.stringify({ id: "c1", currentRenderId: "r1" }),
-                    active_attempt_id: "a1",
-                    revision: 0,
-                    visibility: "visible",
+                    id: "ep-demo",
+                    imported_data: JSON.stringify({
+                      id: "ep-demo",
+                      number: 1,
+                      title: "Demo",
+                      subtitle: "",
+                      publishedGuid: null,
+                    }),
+                    workspace_data: null,
+                    status: null,
+                    is_active: null,
+                    revision: null,
+                    upload_folder_url: null,
+                    clip_count: 1,
+                    intake_count: 0,
                   },
                 ]
-              : [{ data: JSON.stringify(event) }],
+              : sql.includes("FROM clips")
+                ? [
+                    {
+                      data: JSON.stringify({ id: "c1", currentRenderId: "r1" }),
+                      active_attempt_id: "a1",
+                      revision: 0,
+                      visibility: "visible",
+                    },
+                  ]
+                : [{ data: JSON.stringify(event) }],
           }),
         }),
       }),

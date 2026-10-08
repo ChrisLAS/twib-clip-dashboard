@@ -2,6 +2,38 @@ import type { Episode, Clip, Render, ProducerEvent } from "@twib/shared";
 // Entirely fictional metadata examples. No private clip facts, Drive IDs, media, OAuth data, or live producer claims.
 export async function seedDemo(db: D1Database): Promise<void> {
   const found = await db.prepare("SELECT id FROM episodes LIMIT 1").first();
+  // Workspace examples contain no private IDs or links. They do not add a
+  // producer episode/clip/render and are safe to create on an older demo DB.
+  await db.batch([
+    db
+      .prepare(
+        "INSERT OR IGNORE INTO episode_workspaces(id,data,status,is_active) VALUES(?,?,'draft',1)",
+      )
+      .bind(
+        "ep-demo-next",
+        JSON.stringify({
+          id: "ep-demo-next",
+          number: 2,
+          title: "The next conversation",
+          subtitle: "an empty fictional workspace",
+          publishedGuid: null,
+        }),
+      ),
+    db
+      .prepare(
+        "INSERT OR IGNORE INTO episode_workspaces(id,data,status,is_active) VALUES(?,?,'published',0)",
+      )
+      .bind(
+        "ep-demo",
+        JSON.stringify({
+          id: "ep-demo",
+          number: 1,
+          title: "The bigger picture",
+          subtitle: "a fictional published episode",
+          publishedGuid: "fictional-demo-publication",
+        }),
+      ),
+  ]);
   if (found) return;
   const episode: Episode = {
     id: "ep-demo",

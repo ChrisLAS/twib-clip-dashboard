@@ -60,11 +60,19 @@ Manual **Import approved clips** remains inside collapsed **Troubleshooting** co
 
 See [producer append rules](docs/producer-contract.md) and the [sync deployment checklist](docs/catalog-sync.md). No credentials, private catalog identifiers, live media or owner data belong in this repository.
 
+## Episode selection and manual intake
+
+Episode workspaces can exist before an imported clip is ready. The picker keeps published episodes and their exact-render reviews accessible while an active draft starts empty. Private workspace metadata and upload-folder URLs live outside producer manifests and outside this repository.
+
+Use **Add clip** to save a URL or private Drive file link, choose its episode (or Unassigned), describe an already-cut clip versus a full source, and optionally add source times and why it matters. The overview shows the submission as **Added by you — Saved, awaiting processing**, separately from playable clips. Saving does not download media or start a producer. For a file on your computer, open the configured private episode folder in Drive, upload there, then paste its file link.
+
+Duplicate source/range checks, revision guards and idempotent operation receipts protect repeat submissions and uncertain saves. Pending edits and recoverable cancellations preserve history. No preference model is updated and no source is marked ready by intake. See [manual intake boundaries and rollout](docs/manual-intake.md).
+
 ## API essentials
 
-GET `/api/catalog/status`, `/api/session`, `/api/episodes`, `/api/episodes/:id`, `/api/renders/:id`, `/api/attempts/:id/events`, `/api/operations/:idempotencyKey`.
+GET `/api/catalog/status`, `/api/session`, `/api/intake`, `/api/episodes`, `/api/episodes/:id`, `/api/renders/:id`, `/api/attempts/:id/events`, `/api/operations/:idempotencyKey`.
 
-POST `/api/renders/:id/reviews`, `/api/clips/:id/visibility`, `/api/import`. Use same-origin JSON and `X-CSRF-Token` returned by the authenticated session. Review/visibility include `expectedRevision` and unique `idempotencyKey`. A timeout must reconcile GET operation before retrying the identical request. Reusing a key for changed content returns conflict. A stale revision requires refresh and a new deliberate decision.
+POST `/api/renders/:id/reviews`, `/api/clips/:id/visibility`, `/api/import`, `/api/intake`, `/api/intake/:id`. Intake creates and edits use operation receipts and revision checks; edits support update/cancel/restore without deleting records. Use same-origin JSON and `X-CSRF-Token` returned by the authenticated session. Review/visibility include `expectedRevision` and unique `idempotencyKey`. A timeout must reconcile GET operation before retrying the identical request. Reusing a key for changed content returns conflict. A stale revision requires refresh and a new deliberate decision.
 
 GET `/media/:renderId/thumbnail` returns a bounded private Drive preview image after verifying the original artifact; missing previews fall back to a neutral icon. Cards lazy-load images and never download videos to generate previews.
 

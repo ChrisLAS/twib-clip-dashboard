@@ -22,6 +22,18 @@ Use **Apply updates** on the slate to load imported changes. A review offers **R
 
 Manual **Import approved clips** is available only inside the collapsed **Troubleshooting** details. It remains a deliberate CSRF-protected server operation and does not automatically refresh or interrupt reviews.
 
+## Episode workspaces and manual intake
+
+The Episode picker includes empty drafts and published workspaces. First visits prefer the configured active draft; an explicit `?episode=ID` selection survives reload. Switching episodes cancels the previous slate request and invalidates its results. Back/Forward review entries retain episode, clip and exact render identity. If that version is no longer current, the app returns to the slate rather than replacing it silently. Episode switching is unavailable during a save or an open review; return to the slate first. Render-specific note drafts are preserved.
+
+**Add clip or source** records a URL or private Drive file link, optional episode assignment (including Unassigned), already-cut/full-source intent, optional source-relative range, and why it matters. Source validation is shared with the server and never fetches a supplied link. Timestamps embedded in a URL are not imported as a range. Pending submissions appear under **Added by you**, separate from imported renders and the ready-for-review count. This phase has no connected processor, no upload endpoint and no playable manual-intake artifacts.
+
+When the selected assignment has a configured private episode upload folder, the form opens that exact HTTPS Drive folder in a protected new tab. Users upload in Drive themselves and paste the resulting file link. Without folder configuration, the form explicitly reports direct upload unavailable. The dashboard does not create sharing permissions or claim to upload anything.
+
+Source/range duplicates offer **Open existing** and a deliberate **Different cut** path; exact repeats cannot be forced through. Historical render duplicates are identified without opening a different current render. Pending records support editing, cancellation and restoration. Edit drafts keep their original expected revision, so a later server change conflicts instead of silently overwriting it. A conflict can explicitly discard edits and read the latest server record.
+
+Create and per-record edit drafts are stored separately in tab-scoped session storage. An uncertain mutation retains its exact payload and idempotency key, including across reload. Its fields and Close controls remain locked until **Retry confirmation** resolves the same operation. If browser storage is unavailable, only the mounted form retains that request; keep the tab open until the result is confirmed. Successful saves clear only their own draft.
+
 ## Safety and consistency
 
 Review writes include expected revision and a unique operation key. Network failures and 5xx responses reconcile through `/api/operations/:key` before reporting an uncertain result. Undo checks the exact render and committed revision. A new render cannot inherit a previous render’s draft or decision.

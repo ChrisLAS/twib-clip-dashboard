@@ -10,6 +10,7 @@ import {
 
 export function CatalogSyncNotice({
   episode,
+  intakeVersion,
   reviewing,
   loading,
   pending,
@@ -18,6 +19,7 @@ export function CatalogSyncNotice({
   onBack,
 }: {
   episode: EpisodeDetail | null;
+  intakeVersion: number;
   reviewing: boolean;
   loading: boolean;
   pending: boolean;
@@ -41,6 +43,13 @@ export function CatalogSyncNotice({
     [],
   );
   const updates = catalogUpdates(episode, status);
+  const intakeUpdates =
+    status?.intakeVersion !== undefined && status.intakeVersion > intakeVersion;
+  const workspaceUpdates =
+    !!episode &&
+    status?.workspaceVersion !== undefined &&
+    episode.workspaceVersion !== undefined &&
+    status.workspaceVersion > episode.workspaceVersion;
   const lastSuccess = status?.sync.lastSuccessAt ?? episode?.sync.lastSuccessAt;
   const lastError = status ? status.sync.lastError : episode?.sync.lastError;
   return (
@@ -98,10 +107,16 @@ export function CatalogSyncNotice({
           date.
         </p>
       )}
-      {updates.available && (
+      {(updates.available || intakeUpdates || workspaceUpdates) && (
         <div className="catalog-update-banner">
           <div role="status" aria-live="polite" aria-atomic="true">
-            <strong>{catalogUpdateLabel(updates)}</strong>
+            <strong>
+              {updates.available
+                ? catalogUpdateLabel(updates)
+                : intakeUpdates
+                  ? "New or changed manual submissions available"
+                  : "Episode updates available"}
+            </strong>
             <p>
               {reviewing
                 ? "Your current review stays unchanged. Return to the slate when you’re ready to apply updates."
