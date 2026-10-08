@@ -2044,3 +2044,46 @@ select {
   flex-wrap: wrap;
   gap: 10px;
 }
+
+.import-shortcut {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+.import-shortcut[hidden] {
+  display: none;
+}
+.clip-identity .thumb-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+@media (min-width: 1500px) {
+  .thumb-placeholder {
+    width: 106px;
+    height: 63px;
+  }
+}
+@media (max-width: 1200px) {
+  .thumb-placeholder {
+    width: 72px;
+    height: 47px;
+  }
+}
+@media (max-width: 540px) {
+  .thumb-placeholder {
+    width: 80px;
+    height: 53px;
+  }
+}
+
+.clip-identity > div {
+  min-width: 0;
+}
+.clip-identity strong,
+.clip-identity > div > span,
+.clip-identity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -40,6 +40,21 @@ execFileSync("ffmpeg", [
   "+faststart",
   fixturePath,
 ]);
+const thumbnailPath = join(fixtureDir, "synthetic.png");
+execFileSync("ffmpeg", [
+  "-hide_banner",
+  "-loglevel",
+  "error",
+  "-y",
+  "-i",
+  fixturePath,
+  "-frames:v",
+  "1",
+  "-threads",
+  "1",
+  thumbnailPath,
+]);
+const syntheticThumbnail = await readFile(thumbnailPath);
 const syntheticVideo = await readFile(fixturePath);
 const syntheticHash = createHash("sha256").update(syntheticVideo).digest("hex");
 await rm(fixtureDir, { recursive: true, force: true });
@@ -235,8 +250,18 @@ await page.route("**/api/**", async (route) => {
   await route.fulfill({ json: body });
 });
 let mediaFailureStatus = 0;
+let thumbnailFailure = false;
 await page.route("**/media/**", async (route) => {
-  media.push(new URL(route.request().url()).pathname);
+  const path = new URL(route.request().url()).pathname;
+  media.push(path);
+  if (path.endsWith("/thumbnail")) {
+    await route.fulfill(
+      thumbnailFailure
+        ? { status: 404, body: "Thumbnail unavailable" }
+        : { status: 200, contentType: "image/png", body: syntheticThumbnail },
+    );
+    return;
+  }
   if (mediaFailureStatus) {
     await route.fulfill({
       status: mediaFailureStatus,
@@ -290,6 +315,25 @@ try {
     .getByRole("button", { name: "Review Clip c1 by Speaker c1" })
     .waitFor();
   check("Import does not run automatically", imports.length === 0);
+  check(
+    "Populated slate starts with import panel collapsed",
+    (await page.locator(".import-control").count()) === 0,
+  );
+  await page.waitForFunction(
+    () =>
+      Array.from(document.querySelectorAll(".clip-thumbnail")).length === 2 &&
+      Array.from(document.querySelectorAll(".clip-thumbnail")).every(
+        (img) => img.complete && img.naturalWidth > 0,
+      ),
+  );
+  check("Private slate thumbnails decode", true);
+  check(
+    "Slate requests no video bytes",
+    media.every((path) => path.endsWith("/thumbnail")),
+  );
+  await page
+    .getByRole("button", { name: "Import more clips", exact: true })
+    .click();
   await page
     .getByRole("button", { name: "Import approved clips", exact: true })
     .evaluate((button) => {
@@ -310,6 +354,28 @@ try {
       imports[0].csrf === "fixture" &&
       Object.keys(imports[0].body).length === 0,
   );
+  await page
+    .locator(".import-control")
+    .getByRole("button", { name: "Refresh slate", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Import more clips", exact: true })
+    .waitFor();
+  check(
+    "Successful import and refresh removes setup box",
+    (await page.locator(".import-control").count()) === 0,
+  );
+  await page.reload();
+  await page
+    .getByRole("button", { name: "Import more clips", exact: true })
+    .waitFor();
+  check(
+    "Import panel stays collapsed after reload",
+    (await page.locator(".import-control").count()) === 0,
+  );
+  await page
+    .getByRole("button", { name: "Import more clips", exact: true })
+    .click();
   importFailure = true;
   await page
     .getByRole("button", { name: "Import approved clips", exact: true })
@@ -325,6 +391,60 @@ try {
       .isEnabled(),
   );
   importFailure = false;
+  await page
+    .locator(".episode-heading")
+    .getByRole("button", { name: "Refresh slate", exact: true })
+    .click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: "Fixture checksum mismatch" })
+    .waitFor();
+  check(
+    "Import errors stay available after slate refresh",
+    await page.locator(".import-control").isVisible(),
+  );
+  await page
+    .getByRole("button", { name: "Close import controls", exact: true })
+    .click();
+  thumbnailFailure = true;
+  await page.reload();
+  await page.locator(".thumb-placeholder").first().waitFor();
+  check(
+    "Missing thumbnail has a clean fallback",
+    (await page.locator(".thumb-placeholder").count()) === 2 &&
+      (await page.locator(".clip-thumbnail").count()) === 0,
+  );
+  thumbnailFailure = false;
+  await page.reload();
+  await page.waitForFunction(
+    () =>
+      Array.from(document.querySelectorAll(".clip-thumbnail")).length === 2 &&
+      Array.from(document.querySelectorAll(".clip-thumbnail")).every(
+        (img) => img.complete && img.naturalWidth > 0,
+      ),
+  );
+  for (const width of [1144, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    check(
+      `Long slate copy stays inside identity column at ${width}px`,
+      await page
+        .locator(".clip-identity")
+        .first()
+        .evaluate((identity) => {
+          const title = identity.querySelector("strong");
+          title.textContent =
+            "Alex Example, author of Markets Today; interviewer question about international monetary policy";
+          const label = title.getBoundingClientRect(),
+            bounds = identity.getBoundingClientRect();
+          return (
+            label.right <= bounds.right + 1 &&
+            title.scrollWidth > title.clientWidth &&
+            getComputedStyle(title).overflow === "hidden"
+          );
+        }),
+    );
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await capture("desktop-slate");
   await page
     .getByRole("button", { name: "Review Clip c1 by Speaker c1" })
@@ -335,7 +455,8 @@ try {
   });
   check(
     "Import controls stay out of the active review",
-    await page.locator(".import-control").isHidden(),
+    (await page.locator(".import-control").count()) === 0 ||
+      (await page.locator(".import-control").isHidden()),
   );
   await capture("desktop-review");
   await page.setViewportSize({ width: 390, height: 844 });

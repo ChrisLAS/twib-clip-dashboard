@@ -1,6 +1,7 @@
 import type { Env } from "./env";
 import { HttpError } from "./errors";
 import { googleToken, upstreamError } from "./google";
+import { thumbnail } from "./thumbnail";
 export function parseRange(
   value: string | null,
   size: number,
@@ -54,7 +55,7 @@ export async function media(
   const artifact = await env.DB.prepare(
     "SELECT * FROM artifacts WHERE render_id=? AND kind=?",
   )
-    .bind(id, kind)
+    .bind(id, kind === "thumbnail" ? "original" : kind)
     .first<Artifact>();
   if (!artifact)
     throw new HttpError(
@@ -65,7 +66,7 @@ export async function media(
   const token = await googleToken(env, fetcher);
   const base = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(artifact.file_id)}`;
   const meta = await fetcher(
-    `${base}?fields=size,mimeType,capabilities(canDownload),sha256Checksum`,
+    `${base}?fields=size,mimeType,capabilities(canDownload),sha256Checksum${kind === "thumbnail" ? ",thumbnailLink" : ""}`,
     { headers: { Authorization: `Bearer ${token}` }, signal: request.signal },
   );
   if (!meta.ok) throw upstreamError(meta.status);
@@ -74,6 +75,7 @@ export async function media(
     mimeType: string;
     capabilities?: { canDownload?: boolean };
     sha256Checksum?: string;
+    thumbnailLink?: string;
   };
   if (!info.capabilities?.canDownload)
     throw new HttpError(
@@ -91,6 +93,8 @@ export async function media(
       "ARTIFACT_CHANGED",
       "The Drive file no longer matches this immutable render. Re-import a new render.",
     );
+  if (kind === "thumbnail")
+    return thumbnail(request, info.thumbnailLink, token, fetcher);
   const etag = `"${artifact.sha256}"`;
   const headers = new Headers({
     "Content-Type": artifact.mime,

@@ -37,6 +37,7 @@ import "./style.css";
 import { canSeekMedia, productionLabel } from "./review-state";
 import { readDraft, storeDraft } from "./drafts";
 import { ImportControl } from "./import-control";
+import { ClipThumbnail } from "./clip-thumbnail";
 const labels: Record<Decision, string> = {
   up: "Approved",
   down: "Rejected",
@@ -67,6 +68,7 @@ function App() {
       committedRevision: number;
       review: Review;
     } | null>(null);
+  const [slateRevision, setSlateRevision] = useState(0);
   const mutationLock = useRef(false);
   const drafts = useRef(new Map<string, { note: string; reason: string }>());
   const scroll = useRef(0),
@@ -91,6 +93,7 @@ function App() {
         if (eps.length) setEpisode(await api.episode(eps[0].id));
         else setEpisode(null);
       }
+      setSlateRevision((revision) => revision + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load the slate");
     } finally {
@@ -356,6 +359,8 @@ function App() {
             csrf={session.csrfToken}
             ready={session.integrations.drive && session.integrations.producer}
             hidden={!!clip}
+            hasClips={!!episode?.clips.length}
+            slateRevision={slateRevision}
             onRefresh={() => void load()}
           />
         )}
@@ -618,9 +623,11 @@ function App() {
                           {demo ? (
                             <img src={thumbnail(c)} alt="" />
                           ) : (
-                            <span className="thumb-placeholder">
-                              <Film size={22} />
-                            </span>
+                            <ClipThumbnail
+                              key={`${c.render.id}:${slateRevision}`}
+                              renderId={c.render.id}
+                              available={c.render.mediaAvailable}
+                            />
                           )}
                           <div>
                             <strong>{c.render.source.speaker}</strong>

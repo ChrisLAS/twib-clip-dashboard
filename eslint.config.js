@@ -15,6 +15,7 @@ export default ts.config(
         setTimeout: "readonly",
         // Used only inside Playwright page.evaluate browser callbacks.
         document: "readonly",
+        getComputedStyle: "readonly",
       },
     },
   },

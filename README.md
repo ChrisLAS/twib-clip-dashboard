@@ -54,13 +54,15 @@ It does not run or resume a producer, create clips, heartbeat a stalled process,
 
 After owner sign-in and deployment configuration, use **Import approved clips** on the episode slate. This explicitly checks the server-configured private catalog and verifies each artifact; it does not accept a browser-supplied Sheet or Drive file ID. Duplicate clicks are disabled while the request is pending. Failures are shown without automatic retry; a timeout may have completed server-side, so refresh before retrying. Successfully imported immutable records are safe to recheck.
 
-After success, click **Refresh slate**. Import never replaces the currently displayed review or clears drafts, and navigating into a clip does not cancel a submitted import. Leaving the page stops waiting for its response, but cannot undo work already received by the server. This action does not create clips or resume a producer.
+After success, click **Refresh slate**. Once clips are present, the import panel collapses and stays collapsed after reload; use **Import more clips** to reopen it. Pending imports and errors remain visible until resolved or deliberately dismissed. Import never replaces the currently displayed review or clears drafts, and navigating into a clip does not cancel a submitted import. Leaving the page stops waiting for its response, but cannot undo work already received by the server. This action does not create clips or resume a producer.
 
 ## API essentials
 
 GET `/api/session`, `/api/episodes`, `/api/episodes/:id`, `/api/renders/:id`, `/api/attempts/:id/events`, `/api/operations/:idempotencyKey`.
 
 POST `/api/renders/:id/reviews`, `/api/clips/:id/visibility`, `/api/import`. Use same-origin JSON and `X-CSRF-Token` returned by the authenticated session. Review/visibility include `expectedRevision` and unique `idempotencyKey`. A timeout must reconcile GET operation before retrying the identical request. Reusing a key for changed content returns conflict. A stale revision requires refresh and a new deliberate decision.
+
+GET `/media/:renderId/thumbnail` returns a bounded private Drive preview image after verifying the original artifact; missing previews fall back to a neutral icon. Cards lazy-load images and never download videos to generate previews.
 
 GET/HEAD `/media/:renderId/original` or `/proxy`; optional `?download=1`. The server resolves artifact IDs internally; it never accepts client Drive IDs or URLs. Private responses are no-store/no-transform. Upstream response body streams directly.
 

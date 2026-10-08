@@ -267,6 +267,7 @@ describe("Whole-worker boundary fixtures", () => {
     "/assets/app.js",
     "/api/episodes",
     "/media/approved/original",
+    "/media/approved/thumbnail",
   ])("denies unauthenticated %s before touching bindings", async (path) => {
     const response = await worker.fetch(
       new Request(`https://review.example${path}`),
@@ -274,16 +275,18 @@ describe("Whole-worker boundary fixtures", () => {
     );
     expect(response.status).toBe(401);
   });
-  it.each(["/", "/api/episodes", "/media/approved/original"])(
-    "denies unconfigured %s",
-    async (path) => {
-      const response = await worker.fetch(
-        new Request(`https://review.example${path}?demo=true`),
-        { ...env, ACCESS_AUD: undefined, LOCAL_DEMO: "true" },
-      );
-      expect(response.status).toBe(503);
-    },
-  );
+  it.each([
+    "/",
+    "/api/episodes",
+    "/media/approved/original",
+    "/media/approved/thumbnail",
+  ])("denies unconfigured %s", async (path) => {
+    const response = await worker.fetch(
+      new Request(`https://review.example${path}?demo=true`),
+      { ...env, ACCESS_AUD: undefined, LOCAL_DEMO: "true" },
+    );
+    expect(response.status).toBe(503);
+  });
   it.each([
     "/media/https%3A%2F%2Fevil.example/original",
     "/media/approved/https://evil.example",
@@ -297,18 +300,34 @@ describe("Whole-worker boundary fixtures", () => {
     );
     expect(response.status).toBe(404);
   });
-  it("does not accept unregistered Drive file IDs", async () => {
-    const configured = {
-      ...env,
-      DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) },
-    } as unknown as Env;
+  it("denies a signed non-owner thumbnail request before touching bindings", async () => {
     const response = await worker.fetch(
-      new Request("https://review.example/media/arbitraryDriveFile/original", {
-        headers: { "Cf-Access-Jwt-Assertion": await token() },
+      new Request("https://review.example/media/approved/thumbnail", {
+        headers: {
+          "Cf-Access-Jwt-Assertion": await token({
+            email: "other@example.com",
+          }),
+        },
       }),
-      configured,
+      env,
     );
-    expect(response.status).toBe(404);
-    expect(await response.text()).toContain("MEDIA_UNAVAILABLE");
+    expect(response.status).toBe(401);
   });
+  it.each(["original", "thumbnail"])(
+    "does not accept unregistered Drive file IDs for %s",
+    async (kind) => {
+      const configured = {
+        ...env,
+        DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) },
+      } as unknown as Env;
+      const response = await worker.fetch(
+        new Request(`https://review.example/media/arbitraryDriveFile/${kind}`, {
+          headers: { "Cf-Access-Jwt-Assertion": await token() },
+        }),
+        configured,
+      );
+      expect(response.status).toBe(404);
+      expect(await response.text()).toContain("MEDIA_UNAVAILABLE");
+    },
+  );
 });

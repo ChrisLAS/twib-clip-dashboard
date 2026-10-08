@@ -113,7 +113,7 @@ export default {
       )
         result = json(await events(env.DB, path.split("/")[3]));
       else if (
-        /^\/media\/[\w-]+\/(original|proxy)$/.test(path) &&
+        /^\/media\/[\w-]+\/(original|proxy|thumbnail)$/.test(path) &&
         ["GET", "HEAD"].includes(method)
       )
         result = await media(
