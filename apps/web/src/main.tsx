@@ -36,6 +36,7 @@ import { demoEpisode, thumbnail } from "./demo";
 import "./style.css";
 import { canSeekMedia, productionLabel } from "./review-state";
 import { readDraft, storeDraft } from "./drafts";
+import { ImportControl } from "./import-control";
 const labels: Record<Decision, string> = {
   up: "Approved",
   down: "Rejected",
@@ -350,6 +351,14 @@ function App() {
         </aside>
       )}
       <main className={clip ? "review-main" : "slate-main"}>
+        {!demo && session && (
+          <ImportControl
+            csrf={session.csrfToken}
+            ready={session.integrations.drive && session.integrations.producer}
+            hidden={!!clip}
+            onRefresh={() => void load()}
+          />
+        )}
         {demo && (
           <div className="demo-strip">
             <span>Demo workspace</span>Fictional sample metadata.{" "}
@@ -999,9 +1008,7 @@ function ReviewDesk({
           <h1>{clip.title}</h1>
         </div>
         <div className="review-badges">
-          <span className="pill">
-            {productionLabel(clip.production)}
-          </span>
+          <span className="pill">{productionLabel(clip.production)}</span>
           <span className="pill amber">
             Airing:{" "}
             {clip.airing.state === "unknown" ? "unverified" : clip.airing.state}

@@ -2020,3 +2020,27 @@ select {
     margin-top: 10px;
   }
 }
+
+.import-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 18px;
+  border: 1px solid var(--border, #39413e);
+  border-radius: 12px;
+}
+.import-control[hidden] {
+  display: none;
+}
+.import-control p {
+  margin: 6px 0 0;
+  max-width: 65ch;
+}
+.import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}

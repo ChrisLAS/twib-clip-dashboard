@@ -39,6 +39,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json();
 }
 export const api = {
+  importApproved: async (csrf: string, signal?: AbortSignal) => {
+    try {
+      return await request<{ imported: number }>("/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+        body: "{}",
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(60000)])
+          : AbortSignal.timeout(60000),
+      });
+    } catch (error) {
+      if (error instanceof RequestError && error.status < 500) throw error;
+      throw new Error(
+        `${error instanceof RequestError ? error.message + " " : ""}Import could not be confirmed. Refresh the slate before retrying; completed records are safe to recheck.`,
+      );
+    }
+  },
   session: () => request<Session>("/api/session"),
   episodes: () => request<Episode[]>("/api/episodes"),
   episode: (id: string) =>

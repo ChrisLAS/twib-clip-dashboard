@@ -50,6 +50,12 @@ Every review belongs to an exact render ID. A new render starts unreviewed. Deci
 
 It does not run or resume a producer, create clips, heartbeat a stalled process, infer ready-to-air, manage Google sharing, or delete Drive files. Poll/refresh observes stored events; it cannot restart work. A missed producer expectation is “status unknown,” not proof of a crash. Full listening/lip-sync is independent of technical QA.
 
+## Import approved clips
+
+After owner sign-in and deployment configuration, use **Import approved clips** on the episode slate. This explicitly checks the server-configured private catalog and verifies each artifact; it does not accept a browser-supplied Sheet or Drive file ID. Duplicate clicks are disabled while the request is pending. Failures are shown without automatic retry; a timeout may have completed server-side, so refresh before retrying. Successfully imported immutable records are safe to recheck.
+
+After success, click **Refresh slate**. Import never replaces the currently displayed review or clears drafts, and navigating into a clip does not cancel a submitted import. Leaving the page stops waiting for its response, but cannot undo work already received by the server. This action does not create clips or resume a producer.
+
 ## API essentials
 
 GET `/api/session`, `/api/episodes`, `/api/episodes/:id`, `/api/renders/:id`, `/api/attempts/:id/events`, `/api/operations/:idempotencyKey`.

@@ -177,6 +177,8 @@ episode.clips[1].render.qa.push({
 const saves = [];
 const media = [];
 let fail = false;
+let importFailure = false;
+const imports = [];
 await page.route("**/api/**", async (route) => {
   const req = route.request(),
     path = new URL(req.url()).pathname;
@@ -188,7 +190,22 @@ await page.route("**/api/**", async (route) => {
       owner: "Test owner",
       integrations: { drive: true, producer: true },
     };
-  else if (path === "/api/episodes") body = [episode];
+  else if (path === "/api/import") {
+    imports.push({
+      method: req.method(),
+      body: req.postDataJSON(),
+      csrf: req.headers()["x-csrf-token"],
+    });
+    await new Promise((r) => setTimeout(r, 450));
+    if (importFailure) {
+      await route.fulfill({
+        status: 422,
+        json: { error: { message: "Fixture checksum mismatch" } },
+      });
+      return;
+    }
+    body = { imported: 1 };
+  } else if (path === "/api/episodes") body = [episode];
   else if (path === "/api/episodes/ep-demo") body = episode;
   else if (path.endsWith("/reviews")) {
     const input = req.postDataJSON();
@@ -272,6 +289,42 @@ try {
   await page
     .getByRole("button", { name: "Review Clip c1 by Speaker c1" })
     .waitFor();
+  check("Import does not run automatically", imports.length === 0);
+  await page
+    .getByRole("button", { name: "Import approved clips", exact: true })
+    .evaluate((button) => {
+      button.click();
+      button.click();
+    });
+  check(
+    "Import prevents duplicate clicks",
+    await page
+      .getByRole("button", { name: "Importing approved clips…", exact: true })
+      .isDisabled(),
+  );
+  await page.getByText(/Import complete: 1 catalog record checked/).waitFor();
+  check(
+    "Import uses owner CSRF and no client-selected file IDs",
+    imports.length === 1 &&
+      imports[0].method === "POST" &&
+      imports[0].csrf === "fixture" &&
+      Object.keys(imports[0].body).length === 0,
+  );
+  importFailure = true;
+  await page
+    .getByRole("button", { name: "Import approved clips", exact: true })
+    .click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: "Fixture checksum mismatch" })
+    .waitFor();
+  check(
+    "Import displays validation failure and permits deliberate retry",
+    await page
+      .getByRole("button", { name: "Import approved clips", exact: true })
+      .isEnabled(),
+  );
+  importFailure = false;
   await capture("desktop-slate");
   await page
     .getByRole("button", { name: "Review Clip c1 by Speaker c1" })
@@ -280,6 +333,10 @@ try {
     const v = document.querySelector("video");
     return v && v.readyState >= 2 && !v.error;
   });
+  check(
+    "Import controls stay out of the active review",
+    await page.locator(".import-control").isHidden(),
+  );
   await capture("desktop-review");
   await page.setViewportSize({ width: 390, height: 844 });
   await capture("mobile-review");
