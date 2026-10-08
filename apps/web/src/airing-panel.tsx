@@ -267,6 +267,7 @@ export function AiringPanel({
               <label>
                 Verification note
                 <textarea
+                  aria-label="Verification note"
                   value={note}
                   maxLength={3000}
                   disabled={busy || !!pending}

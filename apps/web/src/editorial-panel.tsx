@@ -198,6 +198,7 @@ export function EditorialPanel({
   const valid = !!draft.reason.trim();
   return (
     <details
+      className="workflow-panel"
       onToggle={(e) => {
         const next = e.currentTarget.open;
         setOpen(next);
@@ -206,7 +207,7 @@ export function EditorialPanel({
     >
       <summary>Editorial profile & feedback</summary>
       {open && (
-        <div className="card">
+        <div className="workflow-content">
           <p>
             Approved rules guide future work. Opening this panel does not mean a
             producer used them.
@@ -250,6 +251,7 @@ export function EditorialPanel({
               <label>
                 Explicit reason{" "}
                 <textarea
+                  aria-label="Explicit reason"
                   value={draft.reason}
                   disabled={disabled}
                   onChange={(e) =>
@@ -260,6 +262,7 @@ export function EditorialPanel({
               <label>
                 Rule or proposed learning{" "}
                 <textarea
+                  aria-label="Rule or proposed learning"
                   value={draft.text}
                   disabled={disabled}
                   onChange={(e) => setDraft({ ...draft, text: e.target.value })}
