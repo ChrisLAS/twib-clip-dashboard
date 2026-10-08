@@ -34,6 +34,7 @@ import type {
 import { api, date, duration, RequestError, timecode } from "./api";
 import { demoEpisode, thumbnail } from "./demo";
 import "./style.css";
+import { canSeekMedia, productionLabel } from "./review-state";
 import { readDraft, storeDraft } from "./drafts";
 const labels: Record<Decision, string> = {
   up: "Approved",
@@ -634,16 +635,20 @@ function App() {
                         <div className="production">
                           <span className="pill">
                             <span className="status-dot" />
-                            {c.production.state === "ready"
-                              ? "Ready for review"
-                              : c.production.state === "unknown"
-                                ? "Status unknown"
-                                : c.production.state}
+                            {productionLabel(c.production)}
                           </span>
                           <small>
                             {c.render.qa.some((q) => q.result === "unknown")
                               ? "Playback check pending"
                               : "See QA evidence"}
+                          </small>
+                          <small className="last-progress">
+                            Last progress:{" "}
+                            {c.production.lastProgressAt
+                              ? new Date(
+                                  c.production.lastProgressAt,
+                                ).toLocaleString()
+                              : "unknown"}
                           </small>
                         </div>
                         <div className={`decision ${c.render.review.decision}`}>
@@ -873,6 +878,7 @@ function ReviewDesk({
     [note, setNote] = useState(initialDraft?.note ?? r.review.note),
     [reason, setReason] = useState(initialDraft?.reason ?? r.review.reason),
     [mediaError, setMediaError] = useState(""),
+    [mediaReady, setMediaReady] = useState(false),
     [elapsed, setElapsed] = useState(0),
     [context, setContext] = useState<"transcript" | "evidence">("transcript");
   const video = useRef<HTMLVideoElement>(null);
@@ -921,7 +927,13 @@ function ReviewDesk({
     [captions],
   );
   function playerKeys(e: React.KeyboardEvent) {
-    if (e.target !== video.current || !video.current) return;
+    if (
+      e.target !== video.current ||
+      !video.current ||
+      mediaError ||
+      !mediaReady
+    )
+      return;
     const v = video.current;
     if (e.key === " ") {
       e.preventDefault();
@@ -988,11 +1000,7 @@ function ReviewDesk({
         </div>
         <div className="review-badges">
           <span className="pill">
-            {clip.production.state === "ready"
-              ? "Ready for review"
-              : clip.production.state === "unknown"
-                ? "Status unknown"
-                : clip.production.state}
+            {productionLabel(clip.production)}
           </span>
           <span className="pill amber">
             Airing:{" "}
@@ -1004,32 +1012,77 @@ function ReviewDesk({
         <section className="media-column" aria-label="Clip player and review">
           <div className="player-shell">
             {r.mediaAvailable ? (
-              <video
-                ref={video}
-                controls
-                preload="metadata"
-                playsInline
-                onKeyDown={playerKeys}
-                onTimeUpdate={() =>
-                  setElapsed((video.current?.currentTime || 0) * 1000)
-                }
-                onError={() =>
-                  setMediaError(
-                    "Media could not be loaded. Access may have expired or the file may be unavailable. Your note is kept.",
-                  )
-                }
-                src={`/media/${encodeURIComponent(r.id)}/${r.proxyAvailable ? "proxy" : "original"}`}
-                aria-label={`${clip.title}, version ${r.version}`}
+              <div
+                className={`video-stage${mediaError ? " has-media-error" : ""}`}
               >
-                {captions && (
-                  <track
-                    kind="captions"
-                    label="English transcript"
-                    srcLang="en"
-                    src={captions}
-                  />
+                <video
+                  ref={video}
+                  controls={!mediaError}
+                  aria-hidden={!!mediaError}
+                  tabIndex={mediaError ? -1 : 0}
+                  onLoadedMetadata={() => {
+                    setMediaReady(true);
+                    setMediaError("");
+                  }}
+                  preload="metadata"
+                  playsInline
+                  onKeyDown={playerKeys}
+                  onTimeUpdate={() =>
+                    setElapsed((video.current?.currentTime || 0) * 1000)
+                  }
+                  onError={() => {
+                    video.current?.pause();
+                    setMediaReady(false);
+                    setMediaError(
+                      "Access may have expired, or the file may be unavailable. Your note is kept.",
+                    );
+                  }}
+                  src={`/media/${encodeURIComponent(r.id)}/${r.proxyAvailable ? "proxy" : "original"}`}
+                  aria-label={`${clip.title}, version ${r.version}`}
+                >
+                  {captions && (
+                    <track
+                      kind="captions"
+                      label="English transcript"
+                      srcLang="en"
+                      src={captions}
+                    />
+                  )}
+                </video>
+                {mediaError && (
+                  <div className="playback-failure" role="alert">
+                    <span className="film-circle">
+                      <TriangleAlert size={25} />
+                    </span>
+                    <h2>Playback unavailable</h2>
+                    <p>{mediaError}</p>
+                    <div className="playback-recovery">
+                      <button
+                        onClick={() => {
+                          setMediaError("");
+                          setMediaReady(false);
+                          video.current?.load();
+                        }}
+                      >
+                        <RefreshCw size={15} />
+                        Retry playback
+                      </button>
+                      {r.driveUrl && (
+                        <a
+                          className="button"
+                          href={r.driveUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <ExternalLink size={15} />
+                          Open in Drive
+                        </a>
+                      )}
+                    </div>
+                    <small>No playback check has been completed.</small>
+                  </div>
                 )}
-              </video>
+              </div>
             ) : (
               <div className="missing-media">
                 {demo && (
@@ -1076,11 +1129,6 @@ function ReviewDesk({
               </span>
             </div>
           </div>
-          {mediaError && (
-            <p className="inline-warning" role="alert">
-              {mediaError}
-            </p>
-          )}
           <div className="boundaries">
             <div>
               <span>SOURCE IN</span>
@@ -1257,9 +1305,24 @@ function ReviewDesk({
                   r.cues.map((cue) => (
                     <button
                       key={cue.id}
-                      disabled={!r.mappingVerified || !r.mediaAvailable}
+                      disabled={
+                        !canSeekMedia(
+                          r.mappingVerified,
+                          r.mediaAvailable,
+                          mediaReady,
+                          mediaError,
+                        )
+                      }
                       onClick={() => {
-                        if (video.current)
+                        if (
+                          video.current &&
+                          canSeekMedia(
+                            r.mappingVerified,
+                            r.mediaAvailable,
+                            mediaReady,
+                            mediaError,
+                          )
+                        )
                           video.current.currentTime = Math.max(
                             0,
                             cue.startMs / 1000,

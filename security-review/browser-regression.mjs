@@ -1,11 +1,54 @@
 import { createRequire } from "node:module";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, mkdtemp, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+// Generated test pattern and tone only. Never a source clip or a private artifact.
+const fixtureDir = await mkdtemp(join(tmpdir(), "review-synthetic-"));
+const fixturePath = join(fixtureDir, "synthetic.mp4");
+execFileSync("ffmpeg", [
+  "-hide_banner",
+  "-loglevel",
+  "error",
+  "-y",
+  "-f",
+  "lavfi",
+  "-i",
+  "testsrc2=size=320x180:rate=10",
+  "-f",
+  "lavfi",
+  "-i",
+  "sine=frequency=220:sample_rate=22050",
+  "-t",
+  "30",
+  "-c:v",
+  "libx264",
+  "-threads",
+  "1",
+  "-preset",
+  "veryfast",
+  "-crf",
+  "35",
+  "-pix_fmt",
+  "yuv420p",
+  "-c:a",
+  "aac",
+  "-b:a",
+  "32k",
+  "-movflags",
+  "+faststart",
+  fixturePath,
+]);
+const syntheticVideo = await readFile(fixturePath);
+const syntheticHash = createHash("sha256").update(syntheticVideo).digest("hex");
+await rm(fixtureDir, { recursive: true, force: true });
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 const browser = await chromium.launch({
   ...(process.env.CHROMIUM_PATH
     ? { executablePath: process.env.CHROMIUM_PATH }
-    : {}),
+    : { channel: process.env.BROWSER_CHANNEL || "chrome" }),
   headless: true,
   args: ["--no-sandbox"],
 });
@@ -65,10 +108,10 @@ const makeClip = (id) => ({
     clipId: id,
     version: 1,
     title: `Clip ${id}`,
-    durationMs: 90000,
+    durationMs: 30000,
     createdAt: "2026-10-07T12:00:00Z",
     recipeHash: "fixture",
-    artifactHash: "a".repeat(64),
+    artifactHash: syntheticHash,
     mediaAvailable: true,
     source: {
       title: "Source",
@@ -79,14 +122,22 @@ const makeClip = (id) => ({
       publicationDate: null,
       retrievedAt: null,
       inMs: 100000,
-      outMs: 190000,
+      outMs: 130000,
       context: "Fixture",
     },
     mappingVerified: true,
     cues: [
       { id: "cue1", text: "Second passage", startMs: 20000, endMs: 25000 },
     ],
-    qa: [],
+    qa: ["artifact", "container", "codecs", "duration", "mapping"].map(
+      (check) => ({
+        check,
+        result: "passed",
+        method: "Generated synthetic fixture",
+        checkedAt: "2026-01-01T00:00:00Z",
+        artifactHash: syntheticHash,
+      }),
+    ),
     review: {
       decision: "clear",
       revision: 0,
@@ -107,6 +158,22 @@ const episode = {
   sync: { lastSuccessAt: null, lastError: null },
   observedAt: "2026-10-07T12:00:00Z",
 };
+episode.clips[1].production = {
+  ...episode.clips[1].production,
+  state: "blocked",
+  stage: "Source verification",
+  blocker: "Fixture source needs verification",
+  stale: true,
+  lastProgressAt: "2026-01-01T12:00:00Z",
+  nextExpectedAt: "2026-01-01T13:00:00Z",
+};
+episode.clips[1].render.qa.push({
+  check: "listening",
+  result: "unknown",
+  method: "Fixture manual review pending",
+  checkedAt: null,
+  artifactHash: syntheticHash,
+});
 const saves = [];
 const media = [];
 let fail = false;
@@ -150,12 +217,55 @@ await page.route("**/api/**", async (route) => {
   }
   await route.fulfill({ json: body });
 });
+let mediaFailureStatus = 0;
 await page.route("**/media/**", async (route) => {
   media.push(new URL(route.request().url()).pathname);
-  await route.fulfill({
-    status: 503,
-    body: "Fixture: live private media intentionally unavailable",
-  });
+  if (mediaFailureStatus) {
+    await route.fulfill({
+      status: mediaFailureStatus,
+      body: "Synthetic access failure",
+    });
+    return;
+  }
+  const size = syntheticVideo.length;
+  const value = route.request().headers().range;
+  const headers = {
+    "Content-Type": "video/mp4",
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "no-store",
+  };
+  if (value) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(value);
+    const start = match
+      ? match[1]
+        ? Number(match[1])
+        : Math.max(0, size - Number(match[2]))
+      : size;
+    const end =
+      match?.[1] && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+    if (!match || start >= size || end < start) {
+      await route.fulfill({
+        status: 416,
+        headers: { ...headers, "Content-Range": `bytes */${size}` },
+        body: "",
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 206,
+      headers: {
+        ...headers,
+        "Content-Range": `bytes ${start}-${end}/${size}`,
+        "Content-Length": String(end - start + 1),
+      },
+      body: syntheticVideo.subarray(start, end + 1),
+    });
+  } else
+    await route.fulfill({
+      status: 200,
+      headers: { ...headers, "Content-Length": String(size) },
+      body: syntheticVideo,
+    });
 });
 try {
   await page.goto(process.env.TEST_BASE_URL || "http://127.0.0.1:5173/");
@@ -166,7 +276,10 @@ try {
   await page
     .getByRole("button", { name: "Review Clip c1 by Speaker c1" })
     .click();
-  await page.waitForTimeout(200);
+  await page.waitForFunction(() => {
+    const v = document.querySelector("video");
+    return v && v.readyState >= 2 && !v.error;
+  });
   await capture("desktop-review");
   await page.setViewportSize({ width: 390, height: 844 });
   await capture("mobile-review");
@@ -175,6 +288,52 @@ try {
     .first()
     .click();
   await capture("mobile-slate");
+  const readyRow = page.getByRole("button", {
+    name: "Review Clip c1 by Speaker c1",
+  });
+  const blockedRow = page.getByRole("button", {
+    name: "Review Clip c2 by Speaker c2",
+  });
+  check(
+    "Mobile ready production label visible",
+    await readyRow.getByText("Ready for review", { exact: true }).isVisible(),
+  );
+  check(
+    "Mobile blocked production label visible",
+    await blockedRow.getByText("Blocked", { exact: true }).isVisible(),
+  );
+  check(
+    "Mobile QA detail visible",
+    await readyRow.getByText(/See QA evidence/).isVisible(),
+  );
+  check(
+    "Mobile pending QA visible",
+    await blockedRow
+      .getByText("Playback check pending", { exact: true })
+      .isVisible(),
+  );
+  check(
+    "Mobile last real progress visible",
+    await blockedRow.getByText(/Last progress:/).isVisible(),
+  );
+  episode.clips[1].production = {
+    ...episode.clips[1].production,
+    state: "working",
+    blocker: null,
+  };
+  await page
+    .getByRole("button", { name: "Refresh slate", exact: true })
+    .click();
+  await blockedRow
+    .getByText("Stale · status unknown", { exact: true })
+    .waitFor();
+  check(
+    "Mobile stale status visible",
+    await blockedRow
+      .getByText("Stale · status unknown", { exact: true })
+      .isVisible(),
+  );
+  await capture("mobile-stale-slate");
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page
     .getByRole("button", { name: "Review Clip c1 by Speaker c1" })
@@ -237,22 +396,38 @@ try {
     "Browser Back/Forward retains draft",
     (await page.locator("#review-note").inputValue()) === "Keep this draft",
   );
-  await page.locator("video").evaluate((v) => {
-    Object.defineProperty(v, "currentTime", {
-      configurable: true,
-      get() {
-        return this._testTime || 0;
-      },
-      set(n) {
-        this._testTime = n;
-      },
-    });
+  await page.waitForFunction(() => {
+    const v = document.querySelector("video");
+    return v && v.readyState >= 2 && !v.error;
   });
-  await page.getByRole("button", { name: /Second passage/ }).click();
   check(
-    "Render-relative transcript seek",
-    (await page.locator("video").evaluate((v) => v.currentTime)) === 20,
+    "Synthetic H.264/AAC loaded native metadata",
+    await page
+      .locator("video")
+      .evaluate(
+        (v) => v.duration > 29 && v.duration < 31 && v.videoWidth === 320,
+      ),
   );
+  await page.getByRole("button", { name: /Second passage/ }).click();
+  await page.waitForFunction(() => {
+    const v = document.querySelector("video");
+    return v && !v.seeking && Math.abs(v.currentTime - 20) < 0.25;
+  });
+  check(
+    "Native render-relative transcript seek",
+    await page
+      .locator("video")
+      .evaluate((v) => Math.abs(v.currentTime - 20) < 0.25),
+  );
+  await page.locator("video").evaluate(async (v) => {
+    v.muted = true;
+    await v.play();
+  });
+  await page.waitForFunction(
+    () => document.querySelector("video")?.currentTime > 20.25,
+  );
+  await page.locator("video").evaluate((v) => v.pause());
+  check("Synthetic native video playback advances", true);
   await page.getByRole("button", { name: /^Approve/ }).evaluate((b) => {
     b.click();
     b.click();
@@ -322,6 +497,46 @@ try {
     "Filtered empty view can recover",
     (await page.getByRole("button", { name: /^Review Clip/ }).count()) === 2,
   );
+  for (const status of [403, 404]) {
+    mediaFailureStatus = status;
+    await page
+      .getByRole("button", { name: "Review Clip c1 by Speaker c1" })
+      .click();
+    await page.locator("#review-note").fill(`Keep draft during ${status}`);
+    await page
+      .getByRole("alert")
+      .filter({ hasText: "Playback unavailable" })
+      .waitFor();
+    check(
+      `Media ${status} has explicit failure without native spinner`,
+      !(await page.locator("video").isVisible()),
+    );
+    check(
+      `Media ${status} preserves draft`,
+      (await page.locator("#review-note").inputValue()) ===
+        `Keep draft during ${status}`,
+    );
+    check(
+      `Media ${status} disables transcript seeking`,
+      await page.getByRole("button", { name: /Second passage/ }).isDisabled(),
+    );
+    await capture(`desktop-media-${status}`);
+    mediaFailureStatus = 0;
+    await page.getByRole("button", { name: /Retry playback/ }).click();
+    await page.waitForFunction(() => {
+      const v = document.querySelector("video");
+      return v && v.readyState >= 2 && !v.error;
+    });
+    check(
+      `Media ${status} retry restores synthetic native playback`,
+      (await page.locator("#review-note").inputValue()) ===
+        `Keep draft during ${status}`,
+    );
+    await page
+      .getByRole("button", { name: "Episode 1", exact: false })
+      .first()
+      .click();
+  }
 } catch (e) {
   check("Harness completed", false, String(e));
 }

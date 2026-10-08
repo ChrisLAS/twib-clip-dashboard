@@ -27,7 +27,10 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chrome
+      - name: Install synthetic-media generator
+        run: |
+          if ! command -v ffmpeg >/dev/null; then sudo apt-get update && sudo apt-get install -y ffmpeg; fi
       - name: Start local frontend
         run: |
           npm run dev > /tmp/twib-vite.log 2>&1 &

@@ -1897,3 +1897,126 @@ select {
   color: #93a3ad;
   margin: 5px 0 0;
 }
+/* Terminal playback errors replace the native loading surface, without losing the player ref. */
+.video-stage {
+  position: relative;
+  aspect-ratio: 16/9;
+  background: #111a20;
+}
+.video-stage.has-media-error video {
+  visibility: hidden;
+  pointer-events: none;
+}
+.playback-failure {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  background: radial-gradient(ellipse at 50% 40%, #263039 0%, #111a20 70%);
+}
+.playback-failure h2 {
+  font-size: 24px;
+  font-weight: 550;
+  letter-spacing: -0.3px;
+  margin: 16px 0 8px;
+}
+.playback-failure p {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #bac5cc;
+  max-width: 370px;
+  margin: 0 0 18px;
+}
+.playback-failure small {
+  font-size: 10px;
+  color: #9daeb8;
+  margin-top: 15px;
+}
+.playback-recovery {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.production .last-progress {
+  font-size: 9px;
+  color: #a7b4bc;
+}
+@media (max-width: 799px) {
+  .clip-row .production {
+    display: flex;
+    grid-column: 1/-1;
+    grid-row: 2;
+    align-items: center;
+    gap: 5px 12px;
+    flex-wrap: wrap;
+    padding-left: 86px;
+    margin-top: -2px;
+  }
+  .clip-row .production small {
+    margin: 0;
+  }
+  .clip-row .production .last-progress {
+    flex-basis: 100%;
+    font-size: 9px;
+    margin-top: 1px;
+  }
+  .clip-row .decision {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+@media (max-width: 540px) {
+  .clip-row .production {
+    padding-left: 92px;
+    gap: 6px 9px;
+    margin-top: 0;
+  }
+  .clip-row .production .pill {
+    font-size: 9px;
+  }
+  .clip-row .production small {
+    font-size: 9px;
+  }
+  .clip-row .decision {
+    grid-column: 1/-1;
+    grid-row: 3;
+    margin-top: 0;
+  }
+  .video-stage.has-media-error {
+    aspect-ratio: auto;
+    min-height: 285px;
+  }
+  .video-stage.has-media-error video {
+    position: absolute;
+    inset: 0;
+  }
+  .playback-failure {
+    padding: 20px;
+  }
+  .playback-failure .film-circle {
+    height: 37px;
+    width: 37px;
+  }
+  .playback-failure h2 {
+    font-size: 19px;
+    margin-top: 12px;
+  }
+  .playback-failure p {
+    font-size: 11px;
+    margin-bottom: 12px;
+  }
+  .playback-recovery button,
+  .playback-recovery .button {
+    font-size: 11px;
+    padding: 8px 12px;
+  }
+  .playback-failure small {
+    font-size: 9px;
+    margin-top: 10px;
+  }
+}
