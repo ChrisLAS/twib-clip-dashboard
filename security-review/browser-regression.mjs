@@ -379,6 +379,7 @@ try {
     blocker: null,
   };
   await page
+    .locator(".episode-heading")
     .getByRole("button", { name: "Refresh slate", exact: true })
     .click();
   await blockedRow
