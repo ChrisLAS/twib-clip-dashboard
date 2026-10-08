@@ -21,11 +21,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!r.ok) {
-    const e = await r.json().catch(() => null);
-    throw new RequestError(
-      e?.error?.message || `Request failed (${r.status})`,
-      r.status,
-    );
+    const payload: unknown = await r.json().catch(() => null);
+    let message = `Request failed (${r.status})`;
+    if (payload && typeof payload === "object" && "error" in payload) {
+      const detail = payload.error;
+      if (
+        detail &&
+        typeof detail === "object" &&
+        "message" in detail &&
+        typeof detail.message === "string"
+      ) {
+        message = detail.message;
+      }
+    }
+    throw new RequestError(message, r.status);
   }
   return r.json();
 }

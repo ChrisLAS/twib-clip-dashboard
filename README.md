@@ -30,6 +30,7 @@ See [implementation status](IMPLEMENTATION_STATUS.md) and [security review](secu
 - `apps/web`: review UI. Text uses React escaping; no remote HTML injection.
 - `apps/worker`: authentication before all routes and static assets; API, media and controlled importer.
 - `packages/shared`: typed API records. Production, editorial review, airing evidence and visibility remain separate.
+- `packages/matching`: bounded, offline transcript candidate matching with edition fingerprints and explicit timing coordinates. It never confirms airing automatically; see its [contract and limitations](packages/matching/README.md).
 - `apps/worker/migrations`: D1 append-only review/producer events and projections. Hide/Restore only; no Drive deletion operations.
 - `docs/producer-contract.md`: producer import schema and invariants.
 

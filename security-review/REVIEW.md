@@ -6,7 +6,7 @@ Scope: local implementation and isolated fixtures only. No deployment, new crede
 
 Run: `npx vitest run security-review`
 
-Latest result: **51 tests passed across 4 files**.
+Independent security result: **51 tests passed across 4 files**. The integrated dashboard suite subsequently passed 72 tests before the offline matcher addition.
 
 - Access uses real RSA signatures and `jose.jwtVerify`; tests replace remote JWKS transport with ephemeral local keys. Valid owner succeeds; tampered signature, wrong issuer/audience/account, expired token fail.
 - Unauthenticated UI, assets, API, and media requests fail before binding access. Missing configuration, alternate origins, and production request-driven demo attempts fail closed.
@@ -30,14 +30,16 @@ Latest result: **51 tests passed across 4 files**.
 
 - Null artifact/QA hashes no longer satisfy readiness: regression passed.
 - HTTP 5xx uncertain saves now reconcile by operation ID: regression passed.
-- Undo now checks exact render ID and committed revision before writing: statically verified; browser execution blocked.
+- Undo now checks exact render ID and committed revision before writing: verified by the later hosted browser run.
 
 ## Browser and live-integration limitations
 
-A GitHub Actions browser job is prepared to run this harness in a standard hosted runner, using only fabricated fixtures and no credentials. Hosted execution has not yet been verified; do not treat prepared CI as a passing browser test.
+Hosted CI passed on commit `a1d49aea61025bda3063a31bd2c022cd171d641d`: **29 browser assertions passed**. This includes real decoded synthetic H.264/AAC metadata, native seeking and playback advancement, draft/navigation/keyboard flows, mobile status visibility, and explicit 403/404 failure and retry handling. The generated test-pattern video is temporary; it contains no private or copyrighted source material.
 
-`browser-regression.mjs` is a prepared Playwright interaction harness using intercepted API/media fixtures. It was not executed past browser launch: Chromium failed with `socket() Operation not permitted` in process singleton initialization. The separate visual test attempt hit the same runtime restriction, including approved escalation. Cloud-browser localhost access was rejected. No bypass was attempted.
+Run: https://github.com/ChrisLAS/twib-clip-dashboard/actions/runs/37705787449
 
-Consequently real browser navigation, focus/keyboard, duplicate clicks, draft retention, real video decoding/seek, download checksum, mobile behavior, and owner-login/private-Drive behavior are not claimed as passed. Static review and unit fixtures are not a substitute for the release integration gate.
+The initial local attempts to run `browser-regression.mjs` stopped at browser launch: Chromium failed with `socket() Operation not permitted` in process singleton initialization. The separate local visual test hit the same runtime restriction, including approved escalation. Cloud-browser localhost access was rejected. No local restriction was bypassed; the normal hosted CI environment later ran the harness successfully.
 
-For a permitted browser environment: start the frontend dev server on 127.0.0.1:5173, provide an installed Playwright module (`PLAYWRIGHT_MODULE` can specify its package path), and run `node security-review/browser-regression.mjs`. The default is Playwright-managed Chromium; `CHROMIUM_PATH` optionally selects a permitted system executable. The harness uses fabricated metadata and intercepts all API/media traffic; it does not access private videos.
+The later hosted run establishes the synthetic browser checks listed above. Live owner-login, private Drive streaming, real-source download checksum and device-specific phone validation remain unverified. Synthetic fixtures do not replace that release integration gate.
+
+For a permitted browser environment: start the frontend dev server on 127.0.0.1:5173, provide an installed Playwright module (`PLAYWRIGHT_MODULE` can specify its package path), and run `node security-review/browser-regression.mjs`. The default is the official Chrome channel for H.264/AAC support; `CHROMIUM_PATH` optionally selects a permitted system executable. Install ffmpeg from the official OS repository for temporary synthetic-media generation. The harness uses fabricated metadata and intercepts all API/media traffic; it does not access private videos.

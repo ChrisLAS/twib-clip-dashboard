@@ -537,6 +537,32 @@ try {
       .first()
       .click();
   }
+  // Additional visual-only evidence: the app's built-in five-record fictional demo.
+  // This does not replace API/media fixture checks or establish live integration.
+  const demoUrl = new URL(
+    process.env.TEST_BASE_URL || "http://127.0.0.1:5173/",
+  );
+  demoUrl.search = "?demo=1";
+  await page.goto(demoUrl.toString());
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(".clip-row").length === 5 &&
+      Array.from(document.querySelectorAll(".clip-row img")).every(
+        (img) => img.complete && img.naturalWidth > 0,
+      ),
+  );
+  await page
+    .getByText("LOCAL DEMO · FICTIONAL SAMPLES", { exact: true })
+    .waitFor();
+  await capture("demo-slate");
+  await page
+    .getByRole("button", { name: /^Review / })
+    .first()
+    .click();
+  await page
+    .getByText("LOCAL DEMO · NO VIDEO LOADED", { exact: true })
+    .waitFor();
+  await capture("demo-review");
 } catch (e) {
   check("Harness completed", false, String(e));
 }

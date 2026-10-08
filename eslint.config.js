@@ -5,4 +5,17 @@ export default ts.config(
   js.configs.recommended,
   ...ts.configs.recommended,
   { rules: { "@typescript-eslint/no-explicit-any": "error" } },
+  {
+    files: ["security-review/browser-regression.mjs"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+        console: "readonly",
+        URL: "readonly",
+        setTimeout: "readonly",
+        // Used only inside Playwright page.evaluate browser callbacks.
+        document: "readonly",
+      },
+    },
+  },
 );
