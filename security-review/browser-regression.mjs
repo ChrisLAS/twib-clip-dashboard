@@ -1,3 +1,7 @@
+import {
+  runWorkflowBrowserRegression,
+  runPublicationBrowserRegression,
+} from "./workflow-browser-regression.mjs";
 import { createRequire } from "node:module";
 import { mkdir, writeFile, readFile, mkdtemp, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
@@ -825,6 +829,7 @@ try {
   await page
     .getByRole("button", { name: "Review Clip c1 by Speaker c1" })
     .waitFor();
+  await runPublicationBrowserRegression({ page, check });
   check("Import does not run automatically", imports.length === 0);
   check(
     "Populated slate starts with import panel collapsed",
@@ -1032,6 +1037,15 @@ try {
       !media.some((p) => p.endsWith("/proxy")),
     media.join(","),
   );
+  await runWorkflowBrowserRegression({
+    page,
+    check,
+    renderId: "c1-v1",
+    episodeId: "ep-demo",
+  });
+  await page
+    .locator("details[open].workflow-panel summary")
+    .evaluateAll((nodes) => nodes.forEach((node) => node.click()));
   await page.locator("#review-note").fill("Keep this draft");
   await page.reload();
   await page

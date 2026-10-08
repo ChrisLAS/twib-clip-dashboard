@@ -1,3 +1,6 @@
+import { PublicationPanel } from "./publication-panel";
+import { EditorialPanel } from "./editorial-panel";
+import { AiringPanel } from "./airing-panel";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -745,6 +748,27 @@ function App() {
         ) : (
           episode && (
             <>
+              {!clip && (
+                <PublicationPanel
+                  csrf={session?.csrfToken ?? ""}
+                  demo={!!demo}
+                />
+              )}
+              <EditorialPanel
+                key={`editorial-${episode.id}-${clip?.render.id ?? "slate"}`}
+                csrf={session?.csrfToken ?? ""}
+                episodeId={episode.id}
+                renderId={clip?.render.id}
+                demo={!!demo}
+              />
+              {clip && (
+                <AiringPanel
+                  key={`airing-${clip.render.id}`}
+                  csrf={session?.csrfToken ?? ""}
+                  renderId={clip.render.id}
+                  demo={!!demo}
+                />
+              )}
               {clip ? (
                 <ReviewDesk
                   key={clip.render.id}
@@ -1399,8 +1423,7 @@ function ReviewDesk({
         <div className="review-badges">
           <span className="pill">{productionLabel(clip.production)}</span>
           <span className="pill amber">
-            Airing:{" "}
-            {clip.airing.state === "unknown" ? "unverified" : clip.airing.state}
+            Airing: {demo ? "unverified" : "see owner verification"}
           </span>
         </div>
       </div>

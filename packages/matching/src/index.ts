@@ -1,7 +1,9 @@
 /** Credential-free evidence discovery. No result from this module confirms airing. */
 export interface Edition {
   /** Caller-computed fingerprint of exact media bytes; not a title, URL, or filename. */
-  mediaFingerprint: string;
+  mediaFingerprint: string | null;
+  /** RSS metadata identity is separate from media bytes. */
+  metadataFingerprint?: string;
   /** Caller-computed fingerprint of transcript text, timings, and cue kinds. */
   transcriptFingerprint: string;
 }
@@ -102,7 +104,8 @@ export function normalizeSpeech(text: string): string[] {
 }
 function validate(input: Transcript): void {
   if (
-    !input.edition.mediaFingerprint.trim() ||
+    (input.edition.mediaFingerprint !== null &&
+      !input.edition.mediaFingerprint.trim()) ||
     !input.edition.transcriptFingerprint.trim()
   )
     throw new Error(
@@ -186,6 +189,7 @@ function range(
 function sameEdition(a: Edition, b: Edition): boolean {
   return (
     a.mediaFingerprint === b.mediaFingerprint &&
+    a.metadataFingerprint === b.metadataFingerprint &&
     a.transcriptFingerprint === b.transcriptFingerprint
   );
 }

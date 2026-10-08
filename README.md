@@ -81,3 +81,12 @@ GET/HEAD `/media/:renderId/original` or `/proxy`; optional `?download=1`. The se
 ## Design references
 
 [Cloudflare Access JWT validation](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/), [D1 atomic batches](https://developers.cloudflare.com/d1/worker-api/d1-database/), [Drive blob range downloads](https://developers.google.com/workspace/drive/api/guides/manage-downloads), [Sheets values.get scopes](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/get).
+
+## Publication and editorial workflow
+
+- [Public feed ingestion and rollout](docs/publication.md): independent offset-hourly RSS/transcript/chapter checks, bounded trusted-host fetches, retries and immutable editions
+- [Editorial profile and context](docs/editorial-context.md): explicit approved instructions, scoped feedback, review examples and truthful usage receipts
+- [Airing candidates and verification](docs/airing-evidence.md): offline matching, persisted evidence, version freshness and owner correction/undo
+- [Portable local producer](packages/producer/README.md): hash-verified checkpoints, interruption recovery and a manifest bridge; no live producer connection
+
+The aggregate test run requires Node24+, Python3, ffmpeg and ffprobe. It runs the portable producer's Python safety/recovery regressions through its Vitest wrapper, plus a real render/manifest-schema compatibility check. Missing dependencies fail rather than silently skip. Hosted CI installs ffmpeg from its normal Ubuntu package source when absent.

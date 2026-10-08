@@ -1,3 +1,24 @@
+import {
+  publicationStatus,
+  publicationConfigured,
+  syncPublication,
+  getPublishedTranscript,
+} from "./publication";
+import {
+  getEditorialProfile,
+  getEditorialContext,
+  listEditorialHistory,
+  mutateEditorial,
+  recordEditorialReceipt,
+} from "./editorial";
+import {
+  listAiringEvidence,
+  ingestAiringEvidence,
+  decideAiringEvidence,
+  airingInputSchema,
+  airingDecisionSchema,
+  airingSourceFingerprint,
+} from "./airing";
 import { z } from "zod";
 import type { Env } from "./env";
 import { authenticate, csrfToken, guardMutation, isDemo } from "./auth";
@@ -40,11 +61,11 @@ const reviewInput = z
 const visibilityInput = z
   .object({ ...common, visibility: z.enum(["visible", "hidden"]) })
   .strict();
-async function body(request: Request): Promise<unknown> {
-  if (Number(request.headers.get("Content-Length")) > 12000)
+async function body(request: Request, limit = 12000): Promise<unknown> {
+  if (Number(request.headers.get("Content-Length")) > limit)
     throw new HttpError(413, "REQUEST_TOO_LARGE", "Request is too large.");
   const text = await request.text();
-  if (text.length > 12000)
+  if (text.length > limit)
     throw new HttpError(413, "REQUEST_TOO_LARGE", "Request is too large.");
   try {
     return JSON.parse(text);
@@ -54,10 +75,17 @@ async function body(request: Request): Promise<unknown> {
 }
 export default {
   scheduled(
-    _controller: ScheduledController,
+    controller: ScheduledController,
     env: Env,
     ctx: ExecutionContext,
   ): void {
+    // Offset publication work gets its own invocation and unchanged CPU ceiling.
+    if (controller.cron === "2 * * * *") {
+      if (publicationConfigured(env)) ctx.waitUntil(syncPublication(env));
+      return;
+    }
+    if (controller.cron !== "*/5 * * * *")
+      throw new Error("Unrecognized scheduled trigger; no work was started.");
     // No public endpoint or browser credentials are involved in this trigger.
     ctx.waitUntil(
       pullManifest(env).catch((error: unknown) => {
@@ -89,7 +117,83 @@ export default {
             intakeProducer: false,
           },
         });
-      else if (path === "/api/catalog/status" && method === "GET")
+      else if (path === "/api/publication" && method === "GET")
+        result = json(await publicationStatus(env));
+      else if (path === "/api/publication/sync" && method === "POST") {
+        z.object({})
+          .strict()
+          .parse(await body(request));
+        result = json(await syncPublication(env, { force: true }));
+      } else if (path === "/api/editorial/profile" && method === "GET")
+        result = json(await getEditorialProfile(env.DB, owner));
+      else if (path === "/api/editorial/history" && method === "GET")
+        result = json(await listEditorialHistory(env.DB, owner));
+      else if (path === "/api/editorial/context" && method === "GET")
+        result = json(
+          await getEditorialContext(
+            env.DB,
+            owner,
+            url.searchParams.get("episodeId"),
+            url.searchParams.get("renderId"),
+          ),
+        );
+      else if (path === "/api/editorial/profile" && method === "POST")
+        result = json(
+          await mutateEditorial(
+            env.DB,
+            owner,
+            "profile",
+            await body(request, 48000),
+          ),
+        );
+      else if (path === "/api/editorial/feedback" && method === "POST")
+        result = json(
+          await mutateEditorial(env.DB, owner, "feedback", await body(request)),
+        );
+      else if (path === "/api/editorial/receipts" && method === "POST")
+        result = json(
+          await recordEditorialReceipt(env.DB, owner, await body(request)),
+        );
+      else if (
+        /^\/api\/renders\/[\w-]+\/airing$/.test(path) &&
+        method === "GET"
+      )
+        result = json(
+          await listAiringEvidence(env.DB, path.split("/")[3], owner),
+        );
+      else if (path === "/api/airing/evidence" && method === "POST")
+        result = json(
+          await ingestAiringEvidence(
+            env.DB,
+            airingInputSchema.parse(await body(request, 120000)),
+            owner,
+          ),
+        );
+      else if (/^\/api\/airing\/[\w-]+$/.test(path) && method === "POST")
+        result = json(
+          await decideAiringEvidence(
+            env.DB,
+            path.split("/")[3],
+            airingDecisionSchema.parse(await body(request)),
+            owner,
+          ),
+        );
+      else if (path === "/api/airing/input" && method === "GET") {
+        const renderId = z
+          .string()
+          .regex(/^[a-zA-Z0-9_-]{1,120}$/)
+          .parse(url.searchParams.get("renderId"));
+        const episodeId = z
+          .string()
+          .regex(/^[a-zA-Z0-9_-]{1,120}$/)
+          .parse(url.searchParams.get("episodeId"));
+        const render = await getRender(env.DB, renderId);
+        result = json({
+          render,
+          sourceFingerprint: await airingSourceFingerprint(render),
+          publication: await getPublishedTranscript(env.DB, episodeId),
+        });
+      } else if (path === "/api/catalog/status" && method === "GET")
         result = json(await catalogStatus(env));
       else if (path === "/api/episodes" && method === "GET")
         result = json(await listEpisodes(env.DB, owner));

@@ -18,7 +18,10 @@ Sanitized source is published in the public repository. All committed examples a
 - Private configured Drive-folder link-out for owner uploads; no dashboard upload grant or downstream media processing
 - React review interface with explicitly fictional demo mode and no real media
 - Credential-free security/unit/SQLite integration tests and hosted browser regression workflow
-- Offline transcript candidate matching, edition freshness checks and explicit source/render timing maps; no automatic airing confirmation or live feed adapter
+- Bounded RSS/SRT/chapter ingestion with independent offset-hourly invocation, durable retry/backoff and edition history; private feed/host configuration and actual scheduled success remain rollout gates
+- Offline transcript candidate production, persisted owner-scoped evidence and explicit full/partial/unknown verification with atomic source/episode freshness checks, immutable correction history and uncertain-save reconciliation
+- Versioned owner-editable editorial profile, scoped feedback/proposals, cross-episode exact-render review examples and honest context-use receipts; read-only authorized connector consumption contract
+- Portable local media producer with durable hash-verified checkpoints, real process-interruption recovery, safe bounded media processing and a manifest bridge; no connected producer host, credentials, upload or runtime
 
 ## Validation
 
@@ -37,4 +40,12 @@ Local D1 migrations succeeded. Local Worker/browser runtime restrictions were wo
 
 See [manual intake rollout](docs/manual-intake.md) and [catalog sync operations](docs/catalog-sync.md) for bounds, recovery and verification. Credential-free tests and synthetic hosted browser coverage do not establish real private Drive/Access integration on their own.
 
-The offline matching package is not connected to live RSS, evidence persistence or the UI. Automated airing evidence ingestion, preference modeling, producer execution/resume and physical file deletion are not implemented. No “ready to air” claim is made.
+## Publication, editorial and portable-producer release
+
+The current source adds additive migrations 0005–0007, a separate `2 * * * *` publication trigger while retaining the five-minute catalog trigger, owner-only workflow panels and canonical read-only editorial context. Apply migrations before deploying routes; register the exact production triggers and privately configure the trusted feed/asset hosts. The public source includes no real private profile, reviews, transcripts or manifest data.
+
+A real public-input smoke benchmark in local workerd parsed the 749,336-byte RSS and 87,507-byte SRT with original/normalized hashing; host-observed timings are recorded in docs/publication.md. These wall-time measurements exclude D1/network and are not billed CPU or proof of production headroom. The 50ms configured CPU ceiling remains unchanged. Verify actual scheduled success and production CPU separately.
+
+Automatic candidate generation is not connected to an edge or durable producer runtime. The offline matching CLI can create candidate JSON from authorized owner exports; text alone never confirms airing. The local media producer is recoverable and tested with real ffmpeg interruption, but requires separately authorized hosting, transcription and output-write integration for unattended work. No machine credentials, account plan changes or new services were created. No automatic model training or inferred permanent tastes are claimed.
+
+See docs/publication.md, docs/editorial-context.md, docs/airing-evidence.md and packages/producer/README.md for exact contracts and limits. Current aggregate results and exact-revision hosted browser coverage must be verified before deployment; this source checkpoint alone does not establish live owner access, feed execution or connected processing.

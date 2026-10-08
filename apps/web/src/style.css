@@ -2580,3 +2580,65 @@ button.primary-action:hover {
     border: 0;
   }
 }
+
+/* Secondary workflow tools remain collapsed while reviewing media. */
+.workflow-panel {
+  margin: 12px 0;
+  padding: 14px 18px;
+  background: var(--surface, #fff);
+  border: 1px solid #ded9d0;
+  border-radius: 12px;
+}
+.workflow-panel summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+.workflow-content {
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
+  max-width: 960px;
+}
+.workflow-content p {
+  margin: 0;
+  line-height: 1.5;
+}
+.workflow-content label {
+  display: grid;
+  gap: 7px;
+}
+.workflow-content label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.workflow-content textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 10px;
+  border: 1px solid #c7c2b8;
+  border-radius: 6px;
+  font: inherit;
+}
+.workflow-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.workflow-actions button {
+  border: 1px solid #c7c2b8;
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: #f7f4ee;
+  color: #292d29;
+}
+.workflow-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.airing-evidence {
+  border-top: 1px solid #ded9d0;
+  padding-top: 12px;
+  display: grid;
+  gap: 10px;
+}

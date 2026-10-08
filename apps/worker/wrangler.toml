@@ -8,7 +8,7 @@ preview_urls = false
 [limits]
 cpu_ms = 50
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["*/5 * * * *", "2 * * * *"]
 [assets]
 directory = "../web/dist"
 binding = "ASSETS"

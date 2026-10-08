@@ -1,0 +1,8 @@
+{
+  "name": "@twib/producer",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "test": "python3 -m unittest discover -s . -v"
+  }
+}

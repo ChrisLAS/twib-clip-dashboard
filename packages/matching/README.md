@@ -1,6 +1,6 @@
 # Bounded transcript candidate matching
 
-Offline, deterministic, dependency-free TypeScript functions for finding passages that merit human review. No network calls, database writes, production feed integration, speech recognition, learning, or calibrated AI confidence are implemented. This package is not wired to live RSS, the dashboard UI, or persistence.
+Offline, deterministic, dependency-free TypeScript functions for finding passages that merit human review. No network calls, database writes, production feed integration, speech recognition, learning, or calibrated AI confidence are implemented. The dashboard now has a separately authenticated RSS adapter, candidate persistence, and owner verification UI. Candidate generation itself remains offline. See [airing workflow](../../docs/airing-evidence.md).
 
 ## Contract
 
@@ -10,7 +10,7 @@ Import `findCandidatePassages`, `evidenceFreshness`, and `mapSourceRangeToRender
 
 - A source or clip-render transcript, with its explicit coordinate space.
 - A published-episode transcript in `published_episode` coordinates.
-- Exact media-byte and transcript-edition fingerprints for both inputs. The caller computes and verifies them; a URL, title, source ID, approximate hash, or filename is not an edition fingerprint. Transcript fingerprints must include timings and cue kinds, not only words.
+- Exact media-byte fingerprints when known and transcript-edition fingerprints for both inputs. Set `mediaFingerprint: null` when media bytes have not been hashed, with optional `metadataFingerprint` for a distinct RSS edition identity; never substitute metadata for an exact-media hash. The caller computes and verifies them; a URL, title, source ID, approximate hash, or filename is not an edition fingerprint. Transcript fingerprints must include timings and cue kinds, not only words.
 - Timed cues in ascending start-time order, milliseconds relative to the specified media, with explicit `kind`. Set `cues: null` when unavailable. An empty list is available but yields no evidence.
 
 Only `speech` cues participate. Name metadata, chapter titles, show notes, other metadata, and URL-bearing cues are excluded. Adapters must correctly classify cues; this module cannot infer whether an arbitrary string incorrectly labeled speech is a list of names. Do not manufacture speech from show notes or title metadata.
@@ -67,7 +67,7 @@ This conservative search can miss heavily rewritten, paraphrased, short, multili
 
 ## Edition freshness and rendering
 
-Persist the complete evidence with both edition objects and the algorithm version. Before showing evidence as current, use `evidenceFreshness(evidence, currentSource, currentEpisode)`. Any media/transcript fingerprint or coordinate-space change makes prior evidence stale. Recompute rather than silently carrying it over. These fingerprints are provenance bindings supplied by the caller; this module neither downloads nor hashes media.
+Persist the complete evidence with both edition objects and the algorithm version. Before showing evidence as current, use `evidenceFreshness(evidence, currentSource, currentEpisode)`. Any media/transcript fingerprint or coordinate-space change makes prior evidence stale. Recompute rather than silently carrying it over. A current result with null media identity still establishes no exact-media identity. These fingerprints are provenance bindings supplied by the caller; this module neither downloads nor hashes media.
 
 Source-media milliseconds are not clip-render milliseconds. `mapSourceRangeToRender` accepts a separately supplied, exact-edition edit list. It maps a range only when one explicit segment covers it without overlapping alternatives. Linear scaling supports an explicitly described uniform speed change. Missing coverage, ranges crossing edits, and repeated/ambiguous source placements stay unmapped. Changed fingerprints also stay unmapped. Render identity established by that external edit list must not be confused with identity inferred from a transcript match.
 

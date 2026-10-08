@@ -1,5 +1,8 @@
 export interface Env {
   DB: D1Database;
+  PUBLICATION_FEED_URL?: string;
+  PUBLICATION_ALLOWED_HOSTS?: string;
+  PUBLICATION_AUTO_ROLLOVER?: string;
   ASSETS?: Fetcher;
   APP_ENV: string;
   LOCAL_DEMO?: string;

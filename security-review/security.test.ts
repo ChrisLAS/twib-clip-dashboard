@@ -333,3 +333,42 @@ describe("Whole-worker boundary fixtures", () => {
     },
   );
 });
+
+describe("new workflow endpoint access boundaries", () => {
+  it.each([
+    "/api/publication",
+    "/api/editorial/profile",
+    "/api/editorial/context?episodeId=example",
+    "/api/editorial/history",
+    "/api/renders/example/airing",
+    "/api/airing/input?episodeId=example&renderId=example",
+  ])("denies unauthenticated read %s before database access", async (path) => {
+    const response = await worker.fetch(
+      new Request(env.APP_ORIGIN + path),
+      env,
+    );
+    expect(response.status).toBe(401);
+  });
+  it.each([
+    "/api/publication/sync",
+    "/api/editorial/profile",
+    "/api/editorial/feedback",
+    "/api/editorial/receipts",
+    "/api/airing/evidence",
+    "/api/airing/example",
+  ])("requires CSRF for owner mutation %s", async (path) => {
+    const response = await worker.fetch(
+      new Request(env.APP_ORIGIN + path, {
+        method: "POST",
+        headers: {
+          "Cf-Access-Jwt-Assertion": await token(),
+          Origin: env.APP_ORIGIN!,
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      }),
+      env,
+    );
+    expect(response.status).toBe(403);
+  });
+});

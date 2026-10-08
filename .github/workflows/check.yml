@@ -14,6 +14,12 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
+      - name: Verify portable producer dependencies
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then sudo apt-get update && sudo apt-get install -y ffmpeg; fi
+          python3 --version
+          ffmpeg -version
+          ffprobe -version
       - run: npm run check
         env:
           WRANGLER_SEND_METRICS: "false"
