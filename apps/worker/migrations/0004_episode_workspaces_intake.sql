@@ -55,21 +55,23 @@ CREATE TABLE intake_events (
  fingerprint TEXT NOT NULL
 );
 CREATE TABLE operation_owners (operation_id TEXT PRIMARY KEY REFERENCES operations(id),owner TEXT NOT NULL);
+-- Use SELECT RAISE ... WHERE rather than nested CASE ... END expressions:
+-- D1 REST statement splitting otherwise mistakes CASE END for the trigger end.
 CREATE TRIGGER guard_intake_event BEFORE INSERT ON intake_events BEGIN
- SELECT CASE WHEN (SELECT version FROM sync_state WHERE id=1)<>NEW.expected_catalog_version THEN RAISE(ABORT,'intake catalog conflict') END;
- SELECT CASE WHEN json_extract(NEW.data,'$.id')<>NEW.intake_id OR json_extract(NEW.data,'$.revision')<>NEW.expected_revision+1 THEN RAISE(ABORT,'intake projection mismatch') END;
- SELECT CASE WHEN NEW.action='create' AND (NEW.expected_revision<>0 OR EXISTS(SELECT 1 FROM manual_intake WHERE id=NEW.intake_id)) THEN RAISE(ABORT,'intake revision conflict') END;
- SELECT CASE WHEN NEW.action<>'create' AND NOT EXISTS(SELECT 1 FROM manual_intake WHERE id=NEW.intake_id AND owner=NEW.owner AND revision=NEW.expected_revision) THEN RAISE(ABORT,'intake revision or owner conflict') END;
- SELECT CASE WHEN NEW.action IN ('update','cancel') AND (SELECT status FROM manual_intake WHERE id=NEW.intake_id)<>'awaiting_processing' THEN RAISE(ABORT,'intake state conflict') END;
- SELECT CASE WHEN NEW.action='restore' AND (SELECT status FROM manual_intake WHERE id=NEW.intake_id)<>'cancelled' THEN RAISE(ABORT,'intake state conflict') END;
- SELECT CASE WHEN json_extract(NEW.data,'$.status')<>CASE WHEN NEW.action='cancel' THEN 'cancelled' ELSE 'awaiting_processing' END THEN RAISE(ABORT,'intake state mismatch') END;
- SELECT CASE WHEN NEW.action<>'create' AND EXISTS(SELECT 1 FROM manual_intake WHERE id=NEW.intake_id AND (
+ SELECT RAISE(ABORT,'intake catalog conflict') WHERE (SELECT version FROM sync_state WHERE id=1)<>NEW.expected_catalog_version;
+ SELECT RAISE(ABORT,'intake projection mismatch') WHERE json_extract(NEW.data,'$.id')<>NEW.intake_id OR json_extract(NEW.data,'$.revision')<>NEW.expected_revision+1;
+ SELECT RAISE(ABORT,'intake revision conflict') WHERE NEW.action='create' AND (NEW.expected_revision<>0 OR EXISTS(SELECT 1 FROM manual_intake WHERE id=NEW.intake_id));
+ SELECT RAISE(ABORT,'intake revision or owner conflict') WHERE NEW.action<>'create' AND NOT EXISTS(SELECT 1 FROM manual_intake WHERE id=NEW.intake_id AND owner=NEW.owner AND revision=NEW.expected_revision);
+ SELECT RAISE(ABORT,'intake state conflict') WHERE NEW.action IN ('update','cancel') AND (SELECT status FROM manual_intake WHERE id=NEW.intake_id)<>'awaiting_processing';
+ SELECT RAISE(ABORT,'intake state conflict') WHERE NEW.action='restore' AND (SELECT status FROM manual_intake WHERE id=NEW.intake_id)<>'cancelled';
+ SELECT RAISE(ABORT,'intake state mismatch') WHERE json_extract(NEW.data,'$.status')<>iif(NEW.action='cancel','cancelled','awaiting_processing');
+ SELECT RAISE(ABORT,'immutable intake provenance') WHERE NEW.action<>'create' AND EXISTS(SELECT 1 FROM manual_intake WHERE id=NEW.intake_id AND (
   json_extract(data,'$.submittedUrl')<>json_extract(NEW.data,'$.submittedUrl') OR canonical_url<>json_extract(NEW.data,'$.canonicalUrl') OR
   json_extract(data,'$.provider')<>json_extract(NEW.data,'$.provider') OR json_extract(data,'$.kind')<>json_extract(NEW.data,'$.kind') OR
-  json_extract(data,'$.createdAt')<>json_extract(NEW.data,'$.createdAt'))) THEN RAISE(ABORT,'immutable intake provenance') END;
- SELECT CASE WHEN json_extract(NEW.data,'$.episodeId') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM episodes WHERE id=json_extract(NEW.data,'$.episodeId')) AND NOT EXISTS(SELECT 1 FROM episode_workspaces WHERE id=json_extract(NEW.data,'$.episodeId')) THEN RAISE(ABORT,'intake episode missing') END;
- SELECT CASE WHEN NEW.action<>'cancel' AND EXISTS(SELECT 1 FROM episode_workspaces WHERE id=json_extract(NEW.data,'$.episodeId') AND status='archived') THEN RAISE(ABORT,'intake workspace archived') END;
- SELECT CASE WHEN NEW.action<>'cancel' AND NEW.allow_different_range=0 AND EXISTS(SELECT 1 FROM manual_intake WHERE owner=NEW.owner AND id<>NEW.intake_id AND status='awaiting_processing' AND canonical_url=json_extract(NEW.data,'$.canonicalUrl')) THEN RAISE(ABORT,'intake duplicate source') END;
+  json_extract(data,'$.createdAt')<>json_extract(NEW.data,'$.createdAt')));
+ SELECT RAISE(ABORT,'intake episode missing') WHERE json_extract(NEW.data,'$.episodeId') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM episodes WHERE id=json_extract(NEW.data,'$.episodeId')) AND NOT EXISTS(SELECT 1 FROM episode_workspaces WHERE id=json_extract(NEW.data,'$.episodeId'));
+ SELECT RAISE(ABORT,'intake workspace archived') WHERE NEW.action<>'cancel' AND EXISTS(SELECT 1 FROM episode_workspaces WHERE id=json_extract(NEW.data,'$.episodeId') AND status='archived');
+ SELECT RAISE(ABORT,'intake duplicate source') WHERE NEW.action<>'cancel' AND NEW.allow_different_range=0 AND EXISTS(SELECT 1 FROM manual_intake WHERE owner=NEW.owner AND id<>NEW.intake_id AND status='awaiting_processing' AND canonical_url=json_extract(NEW.data,'$.canonicalUrl'));
 END;
 CREATE TRIGGER apply_intake_event AFTER INSERT ON intake_events BEGIN
  INSERT INTO manual_intake(id,owner,episode_id,canonical_url,in_ms,out_ms,status,revision,data)
