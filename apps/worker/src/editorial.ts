@@ -517,7 +517,7 @@ export async function recordEditorialReceipt(
 export async function listEditorialHistory(db: D1Database, owner: string) {
   const events = await db
     .prepare(
-      "SELECT id,action,reason,scope,expected_revision+1 AS version,created_at AS createdAt FROM editorial_events WHERE owner=? ORDER BY expected_revision DESC LIMIT 100",
+      "SELECT id,action,reason,scope,actor,expected_revision+1 AS version,created_at AS createdAt FROM editorial_events WHERE owner=? ORDER BY expected_revision DESC LIMIT 100",
     )
     .bind(owner)
     .all();

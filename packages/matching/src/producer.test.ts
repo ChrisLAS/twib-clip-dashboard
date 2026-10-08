@@ -64,3 +64,31 @@ it("does not substitute a URL for publication content identity", () => {
     /fingerprints/,
   );
 });
+
+it("accepts a separate exact-render ASR asset without changing false source mapping", () => {
+  const v = fixture();
+  v.render.mappingVerified = false;
+  v.sourceTranscriptAsset = {
+    id: "rta-observation",
+    renderId: v.render.id,
+    mediaSha256: v.render.artifactHash!,
+    durationMs: v.render.durationMs,
+    origin: "machine_asr",
+    alignment: "exact_render",
+    textAccuracy: "unverified",
+    sourceMapping: "unknown",
+    coordinateSpace: "clip_render",
+    cues: v.render.cues,
+    transcriptHash: "f".repeat(64),
+    assetHash: "a".repeat(64),
+    createdAt: "2026-10-08T00:00:00Z",
+  };
+  const candidate = produceAiringCandidate(v, "request-key");
+  expect(candidate.status).toBe("CANDIDATE");
+  expect(candidate.sourceTranscriptAssetId).toBe("rta-observation");
+  expect(candidate.sourceTranscriptAssetHash).toBe("a".repeat(64));
+  expect(candidate.exactRenderIdentity).toBe("not_established_by_text");
+  expect(v.render.mappingVerified).toBe(false);
+  v.sourceTranscriptAsset.mediaSha256 = "0".repeat(64);
+  expect(() => produceAiringCandidate(v, "request-key")).toThrow(/identity/);
+});

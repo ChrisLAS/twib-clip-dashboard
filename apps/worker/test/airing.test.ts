@@ -372,3 +372,340 @@ describe("airing adversarial guards", () => {
     ).toBe(1);
   });
 });
+
+// Exact-render transcripts are a separate immutable observation, not render mapping edits.
+import {
+  importRenderTranscriptAsset,
+  prepareRenderTranscriptAsset,
+  getRenderTranscriptAsset,
+  selectRenderTranscriptAsset,
+} from "../src/render-transcripts";
+import type {
+  RenderTranscriptInput,
+  RenderTranscriptAsset,
+} from "../../../packages/shared/src/render-transcripts";
+function transcriptInput(
+  text = "Machine speech words",
+  key = "transcript-request",
+): RenderTranscriptInput {
+  return {
+    idempotencyKey: key,
+    renderId: "render-topic-one-v1",
+    mediaSha256: "a".repeat(64),
+    origin: "machine_asr",
+    alignment: "exact_render",
+    textAccuracy: "unverified",
+    sourceMapping: "unknown",
+    cues: [{ id: "asr-1", startMs: 0, endMs: 1000, text }],
+  };
+}
+function insertAsset(asset: RenderTranscriptAsset, owner = "owner") {
+  sqlite
+    .prepare(
+      "INSERT INTO render_transcript_assets(id,owner,render_id,media_sha256,duration_ms,transcript_hash,asset_hash,created_at,data) VALUES(?,?,?,?,?,?,?,?,?)",
+    )
+    .run(
+      asset.id,
+      owner,
+      asset.renderId,
+      asset.mediaSha256,
+      asset.durationMs,
+      asset.transcriptHash,
+      asset.assetHash,
+      asset.createdAt,
+      JSON.stringify(asset),
+    );
+}
+async function assetCandidate(): Promise<AiringEvidenceInput> {
+  const asset = await importRenderTranscriptAsset(
+    db,
+    transcriptInput(),
+    "owner",
+  );
+  const render = await getRender(db, asset.renderId);
+  return {
+    ...(await input()),
+    sourceFingerprint: await airingSourceFingerprint(render, asset),
+    sourceTranscriptAssetId: asset.id,
+    sourceTranscriptAssetHash: asset.assetHash,
+    status: "CANDIDATE",
+    reason: "passages_require_verification",
+    passages: [
+      {
+        sourceRange: { startMs: 0, endMs: 1000 },
+        episodeRange: { startMs: 0, endMs: 1000 },
+        timingPrecision: "enclosing_cues",
+        quality: "exact_normalized_passage",
+        matchedTokens: 24,
+        editedTokens: 0,
+        distinctiveTokens: 10,
+        ambiguity: "not_detected",
+        sourceExcerpt: "Machine speech words",
+        episodeExcerpt: "Machine speech words",
+      },
+    ],
+  };
+}
+const positiveDecision = {
+  expectedRevision: 0,
+  idempotencyKey: "asset-decision-key",
+  decision: "full" as const,
+  note: "",
+  verification: "listened_compared_exact_render" as const,
+};
+describe("exact-render transcript assets", () => {
+  it("uses server canonical hashes, scoped immutable history and idempotent receipts", async () => {
+    const before = await getRender(db, "render-topic-one-v1");
+    const asset = await importRenderTranscriptAsset(
+      db,
+      transcriptInput(),
+      "owner",
+    );
+    expect(
+      await importRenderTranscriptAsset(db, transcriptInput(), "owner"),
+    ).toEqual(asset);
+    expect(
+      await importRenderTranscriptAsset(
+        db,
+        transcriptInput("Machine speech words", "new-key-same-content"),
+        "owner",
+      ),
+    ).toEqual(asset);
+    expect(asset.assetHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(asset.transcriptHash).not.toBe(asset.assetHash);
+    expect(await getRenderTranscriptAsset(db, asset.id, "other")).toBeNull();
+    expect(await getRender(db, before.id)).toEqual(before);
+    expect(() =>
+      sqlite
+        .prepare("UPDATE render_transcript_assets SET asset_hash=? WHERE id=?")
+        .run("b".repeat(64), asset.id),
+    ).toThrow(/immutable/);
+    expect(() =>
+      sqlite
+        .prepare("DELETE FROM render_transcript_assets WHERE id=?")
+        .run(asset.id),
+    ).toThrow(/immutable/);
+    await expect(
+      importRenderTranscriptAsset(
+        db,
+        {
+          ...transcriptInput(),
+          assetHash: "b".repeat(64),
+        } as RenderTranscriptInput,
+        "owner",
+      ),
+    ).rejects.toThrow();
+    await expect(
+      importRenderTranscriptAsset(db, transcriptInput("Changed text"), "owner"),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_REUSE" });
+    await expect(
+      importRenderTranscriptAsset(db, transcriptInput(), "other"),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_REUSE" });
+  });
+  it("rejects mismatched hashes, source coordinates, malformed and overlapping cue ranges", async () => {
+    const v = transcriptInput();
+    await expect(
+      importRenderTranscriptAsset(
+        db,
+        { ...v, mediaSha256: "b".repeat(64) },
+        "owner",
+      ),
+    ).rejects.toMatchObject({ code: "RENDER_HASH_MISMATCH" });
+    for (const cues of [
+      [{ ...v.cues[0], startMs: -1 }],
+      [{ ...v.cues[0], endMs: 0 }],
+      [{ ...v.cues[0], endMs: 99999999 }],
+      [v.cues[0], { ...v.cues[0], id: "asr-2", startMs: 999, endMs: 2000 }],
+      [v.cues[0], { ...v.cues[0], startMs: 1000, endMs: 2000 }],
+    ])
+      await expect(
+        importRenderTranscriptAsset(db, { ...v, cues }, "owner"),
+      ).rejects.toThrow();
+    await expect(
+      importRenderTranscriptAsset(
+        db,
+        { ...v, sourceMapping: "verified" } as unknown as RenderTranscriptInput,
+        "owner",
+      ),
+    ).rejects.toThrow();
+  });
+  it("allows mapping-false candidate only through a separate exact asset", async () => {
+    sqlite.exec(
+      "UPDATE renders SET data=json_set(data,'$.mappingVerified',json('false')) WHERE id='render-topic-one-v1'",
+    );
+    const v = await assetCandidate();
+    expect((await getRender(db, v.renderId)).mappingVerified).toBe(false);
+    await ingestAiringEvidence(db, v, "owner");
+    expect(
+      (await listAiringEvidence(db, v.renderId, "owner")).evidence[0].freshness,
+    ).toBe("current");
+    await expect(
+      ingestAiringEvidence(
+        db,
+        { ...v, idempotencyKey: "wrong-owner-request" },
+        "other",
+      ),
+    ).rejects.toMatchObject({ code: "STALE_EVIDENCE" });
+    const legacy = {
+      ...v,
+      idempotencyKey: "legacy-candidate-key",
+      sourceTranscriptAssetId: undefined,
+      sourceTranscriptAssetHash: undefined,
+      sourceFingerprint: await airingSourceFingerprint(
+        await getRender(db, v.renderId),
+      ),
+    };
+    await expect(
+      ingestAiringEvidence(db, legacy, "owner"),
+    ).rejects.toMatchObject({ code: "UNVERIFIED_MAPPING" });
+  });
+  it("orders same-timestamp corrections by insertion and does not repoint old evidence or advance dedup", async () => {
+    const v = await assetCandidate();
+    await ingestAiringEvidence(db, v, "owner");
+    const old = await getRenderTranscriptAsset(
+      db,
+      v.sourceTranscriptAssetId!,
+      "owner",
+    );
+    const render = await getRender(db, v.renderId);
+    const next = await prepareRenderTranscriptAsset(
+      transcriptInput("Corrected text", "next-transcript-key"),
+      render,
+      "owner",
+    );
+    next.createdAt = old!.createdAt;
+    insertAsset(next);
+    expect((await selectRenderTranscriptAsset(db, render, "owner"))?.id).toBe(
+      next.id,
+    );
+    await importRenderTranscriptAsset(
+      db,
+      transcriptInput("Machine speech words", "repeat-older-key"),
+      "owner",
+    );
+    expect((await selectRenderTranscriptAsset(db, render, "owner"))?.id).toBe(
+      next.id,
+    );
+    const row = (await listAiringEvidence(db, v.renderId, "owner")).evidence[0];
+    expect(row.sourceTranscriptAssetId).toBe(old!.id);
+    expect(row.freshness).toBe("stale");
+    await expect(
+      decideAiringEvidence(db, row.id, positiveDecision, "owner"),
+    ).rejects.toMatchObject({ code: "STALE_EVIDENCE" });
+    await decideAiringEvidence(
+      db,
+      row.id,
+      { ...positiveDecision, decision: "undo", verification: "none" },
+      "owner",
+    );
+  });
+  it("atomically rejects a transcript correction racing candidate insert", async () => {
+    const v = await assetCandidate();
+    const next = await prepareRenderTranscriptAsset(
+      transcriptInput("Corrected words"),
+      await getRender(db, v.renderId),
+      "owner",
+    );
+    ingestHook = () => insertAsset(next);
+    await expect(ingestAiringEvidence(db, v, "owner")).rejects.toThrow();
+    expect(
+      sqlite.prepare("SELECT count(*) n FROM airing_evidence").get()?.n,
+    ).toBe(0);
+  });
+  it("atomically rejects a transcript correction racing positive decision", async () => {
+    const v = await assetCandidate();
+    await ingestAiringEvidence(db, v, "owner");
+    const row = (await listAiringEvidence(db, v.renderId, "owner")).evidence[0];
+    const next = await prepareRenderTranscriptAsset(
+      transcriptInput("Corrected words"),
+      await getRender(db, v.renderId),
+      "owner",
+    );
+    hook = () => insertAsset(next);
+    await expect(
+      decideAiringEvidence(db, row.id, positiveDecision, "owner"),
+    ).rejects.toMatchObject({ code: "REVISION_CONFLICT" });
+    expect(
+      sqlite.prepare("SELECT count(*) n FROM airing_events").get()?.n,
+    ).toBe(0);
+  });
+  it("database guards reject forged asset hashes and owners at ingestion", async () => {
+    const v = await assetCandidate();
+    await ingestAiringEvidence(db, v, "owner");
+    const row = sqlite.prepare("SELECT * FROM airing_evidence").get()!;
+    for (const [owner, data] of [
+      ["other", v],
+      ["owner", { ...v, sourceTranscriptAssetHash: "d".repeat(64) }],
+    ] as const)
+      expect(() =>
+        sqlite
+          .prepare(
+            "INSERT INTO airing_evidence(id,owner,render_id,episode_id,fingerprint,data,source_snapshot) VALUES(?,?,?,?,?,?,?)",
+          )
+          .run(
+            "forged",
+            owner,
+            v.renderId,
+            v.episodeId,
+            "forged-fp",
+            JSON.stringify(data),
+            row.source_snapshot!,
+          ),
+      ).toThrow();
+  });
+});
+
+it("fences render hash changes racing transcript import and records no partial receipt", async () => {
+  const racingDb = {
+    ...db,
+    batch: async (statements: D1PreparedStatement[]) => {
+      sqlite
+        .prepare(
+          "UPDATE renders SET data=json_set(data,'$.artifactHash',?) WHERE id='render-topic-one-v1'",
+        )
+        .run("f".repeat(64));
+      return db.batch(statements);
+    },
+  } as unknown as D1Database;
+  await expect(
+    importRenderTranscriptAsset(racingDb, transcriptInput(), "owner"),
+  ).rejects.toMatchObject({ code: "SAVE_UNCONFIRMED" });
+  expect(
+    sqlite.prepare("SELECT count(*) n FROM render_transcript_assets").get()?.n,
+  ).toBe(0);
+  expect(
+    sqlite
+      .prepare(
+        "SELECT count(*) n FROM operations WHERE id='transcript-request'",
+      )
+      .get()?.n,
+  ).toBe(0);
+});
+it("reconciles a lost transcript import response without duplicating or changing ownership", async () => {
+  const uncertainDb = {
+    ...db,
+    batch: async (statements: D1PreparedStatement[]) => {
+      await db.batch(statements);
+      throw new Error("Lost import response");
+    },
+  } as unknown as D1Database;
+  const asset = await importRenderTranscriptAsset(
+    uncertainDb,
+    transcriptInput(),
+    "owner",
+  );
+  expect(
+    await importRenderTranscriptAsset(db, transcriptInput(), "owner"),
+  ).toEqual(asset);
+  const other = await importRenderTranscriptAsset(
+    db,
+    transcriptInput("Machine speech words", "other-owner-import"),
+    "other",
+  );
+  expect(other.assetHash).toBe(asset.assetHash);
+  expect(other.id).not.toBe(asset.id);
+  expect(await getRenderTranscriptAsset(db, other.id, "owner")).toBeNull();
+  expect(
+    sqlite.prepare("SELECT count(*) n FROM render_transcript_assets").get()?.n,
+  ).toBe(2);
+});

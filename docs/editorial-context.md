@@ -43,3 +43,9 @@ This connector path is read-only. If no authorized receipt-write path is availab
 ## Validation
 
 apps/worker/test/editorial.test.ts covers empty initialization, blank feedback, proposal confirmation, receipt claims, owner isolation, immutable undo, exact-render target checks, scoped deterministic projection, revision races/idempotency, and nonexistent evidence. Dashboard component EditorialPanel lazily loads when expanded; it never emits producer-use receipts.
+
+## Explicit-instruction administrator bootstrap
+
+An already-authorized administrator connector can apply a separately reviewed, private starter profile without fabricating an owner HTTP session. Migration0009 adds an explicit event actor. The pure `prepareEditorialBootstrap(rawRequest, verifiedOwnerPrincipal)` helper in `apps/worker/src/editorial-bootstrap.ts` accepts only revision-zero replacement of explicit global rules with no invented feedback IDs; it returns the bound SQL statement, immutable projection, request fingerprint and reconciliation query. It does not execute SQL or grant access. Private instruction content must remain outside the repository.
+
+Before executing, independently verify the exact existing Access subject in review_events.reviewer and that the owner's profile/history is empty. Have the coordinating operator review the exact instruction payload and authority. The SQL atomically requires an existing review principal and a fresh empty profile/history; the normal editorial event trigger applies revision fencing. Its actor is `assistant_bootstrap`, not `owner`. A repeated/no-op statement is not proof of success: run the returned reconciliation query and require identical request fingerprint, actor and profile. A different existing profile or key must be reported and never overwritten. Read back version1 and the canonical context. No HTTP token, machine identity or new persistent permission is created.

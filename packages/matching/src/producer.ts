@@ -4,7 +4,9 @@ import type {
   PublishedEdition,
   Render,
 } from "../../shared/src/index.ts";
+import type { RenderTranscriptAsset } from "../../shared/src/render-transcripts.ts";
 export interface CandidateInput {
+  sourceTranscriptAsset?: RenderTranscriptAsset | null;
   render: Render;
   sourceFingerprint: string;
   publication: {
@@ -18,8 +20,28 @@ export function produceAiringCandidate(
   input: CandidateInput,
   idempotencyKey: string,
 ): AiringEvidenceInput {
-  const { render, sourceFingerprint, publication } = input;
-  if (!render.artifactHash || !render.mappingVerified)
+  const {
+    render,
+    sourceFingerprint,
+    publication,
+    sourceTranscriptAsset: asset,
+  } = input;
+  if (
+    asset &&
+    (asset.renderId !== render.id ||
+      asset.mediaSha256 !== render.artifactHash ||
+      asset.durationMs !== render.durationMs ||
+      asset.coordinateSpace !== "clip_render" ||
+      asset.alignment !== "exact_render" ||
+      asset.origin !== "machine_asr" ||
+      asset.textAccuracy !== "unverified" ||
+      asset.sourceMapping !== "unknown" ||
+      !/^[a-f0-9]{64}$/.test(asset.assetHash) ||
+      !/^[a-f0-9]{64}$/.test(asset.transcriptHash))
+  )
+    throw new Error("Exact render transcript asset identity is invalid.");
+  const cues = asset?.cues ?? render.cues;
+  if (!render.artifactHash || (!render.mappingVerified && !asset))
     throw new Error(
       "An exact render hash and verified render-relative transcript mapping are required.",
     );
@@ -51,7 +73,16 @@ export function produceAiringCandidate(
   if (
     !Number.isSafeInteger(render.durationMs) ||
     render.durationMs <= 0 ||
-    render.cues.some((c) => c.endMs > render.durationMs)
+    cues.some((c) => c.endMs > render.durationMs) ||
+    (asset &&
+      cues.some(
+        (c, i) =>
+          !Number.isSafeInteger(c.startMs) ||
+          !Number.isSafeInteger(c.endMs) ||
+          c.startMs < 0 ||
+          c.endMs <= c.startMs ||
+          (i > 0 && c.startMs < cues[i - 1].endMs),
+      ))
   )
     throw new Error(
       "Render-relative cues must stay within the exact render duration.",
@@ -63,7 +94,7 @@ export function produceAiringCandidate(
         transcriptFingerprint: sourceFingerprint,
       },
       coordinateSpace: "clip_render",
-      cues: render.cues.map((c) => ({ ...c, kind: "speech" as const })),
+      cues: cues.map((c) => ({ ...c, kind: "speech" as const })),
     },
     {
       edition: {
@@ -83,6 +114,12 @@ export function produceAiringCandidate(
     episodeId: publication.edition.episodeId,
     renderArtifactHash: render.artifactHash,
     sourceFingerprint,
+    ...(asset
+      ? {
+          sourceTranscriptAssetId: asset.id,
+          sourceTranscriptAssetHash: asset.assetHash,
+        }
+      : {}),
     episodeEditionFingerprint: publication.edition.editionFingerprint,
     episodeTranscriptHash: publication.edition.transcriptHash,
     algorithmVersion: evidence.algorithmVersion,

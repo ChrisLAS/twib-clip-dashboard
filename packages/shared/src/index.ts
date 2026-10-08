@@ -1,3 +1,4 @@
+export * from "./render-transcripts";
 export * from "./airing";
 export * from "./editorial";
 export * from "./publication";

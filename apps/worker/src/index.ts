@@ -1,4 +1,9 @@
 import {
+  renderTranscriptInputSchema,
+  importRenderTranscriptAsset,
+  selectRenderTranscriptAsset,
+} from "./render-transcripts";
+import {
   publicationStatus,
   publicationConfigured,
   syncPublication,
@@ -64,11 +69,37 @@ const visibilityInput = z
 async function body(request: Request, limit = 12000): Promise<unknown> {
   if (Number(request.headers.get("Content-Length")) > limit)
     throw new HttpError(413, "REQUEST_TOO_LARGE", "Request is too large.");
-  const text = await request.text();
-  if (text.length > limit)
-    throw new HttpError(413, "REQUEST_TOO_LARGE", "Request is too large.");
+  const reader = request.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        length += value.byteLength;
+        if (length > limit) {
+          await reader.cancel();
+          throw new HttpError(
+            413,
+            "REQUEST_TOO_LARGE",
+            "Request is too large.",
+          );
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
   try {
-    return JSON.parse(text);
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     throw new HttpError(400, "INVALID_JSON", "Invalid JSON request.");
   }
@@ -161,7 +192,21 @@ export default {
         result = json(
           await listAiringEvidence(env.DB, path.split("/")[3], owner),
         );
-      else if (path === "/api/airing/evidence" && method === "POST")
+      else if (
+        /^\/api\/renders\/[\w-]+\/transcripts$/.test(path) &&
+        method === "POST"
+      ) {
+        const input = renderTranscriptInputSchema.parse(
+          await body(request, 1000000),
+        );
+        if (input.renderId !== path.split("/")[3])
+          throw new HttpError(
+            422,
+            "RENDER_ID_MISMATCH",
+            "Transcript render must match the requested render.",
+          );
+        result = json(await importRenderTranscriptAsset(env.DB, input, owner));
+      } else if (path === "/api/airing/evidence" && method === "POST")
         result = json(
           await ingestAiringEvidence(
             env.DB,
@@ -188,9 +233,18 @@ export default {
           .regex(/^[a-zA-Z0-9_-]{1,120}$/)
           .parse(url.searchParams.get("episodeId"));
         const render = await getRender(env.DB, renderId);
+        const sourceTranscriptAsset = await selectRenderTranscriptAsset(
+          env.DB,
+          render,
+          owner,
+        );
         result = json({
           render,
-          sourceFingerprint: await airingSourceFingerprint(render),
+          sourceTranscriptAsset,
+          sourceFingerprint: await airingSourceFingerprint(
+            render,
+            sourceTranscriptAsset,
+          ),
           publication: await getPublishedTranscript(env.DB, episodeId),
         });
       } else if (path === "/api/catalog/status" && method === "GET")

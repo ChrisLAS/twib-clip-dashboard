@@ -356,6 +356,7 @@ describe("new workflow endpoint access boundaries", () => {
     "/api/editorial/receipts",
     "/api/airing/evidence",
     "/api/airing/example",
+    "/api/renders/example/transcripts",
   ])("requires CSRF for owner mutation %s", async (path) => {
     const response = await worker.fetch(
       new Request(env.APP_ORIGIN + path, {
@@ -371,4 +372,21 @@ describe("new workflow endpoint access boundaries", () => {
     );
     expect(response.status).toBe(403);
   });
+});
+
+it("bounds transcript request bytes even without a declared content length", async () => {
+  const response = await worker.fetch(
+    new Request(env.APP_ORIGIN + "/api/renders/example/transcripts", {
+      method: "POST",
+      headers: {
+        "Cf-Access-Jwt-Assertion": await token(),
+        Origin: env.APP_ORIGIN!,
+        "Content-Type": "application/json",
+        "X-CSRF-Token": await csrfToken("owner", env, false),
+      },
+      body: " ".repeat(1000001),
+    }),
+    env,
+  );
+  expect(response.status).toBe(413);
 });

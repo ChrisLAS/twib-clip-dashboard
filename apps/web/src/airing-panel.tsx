@@ -182,6 +182,13 @@ export function AiringPanel({
                     </strong>{" "}
                     · {e.freshness} · owner decision: {e.decision}
                   </p>
+                  {e.sourceTranscriptAssetId && (
+                    <p>
+                      Machine transcript from this exact rendered file. Words
+                      are unverified; original source-context mapping remains
+                      unknown.
+                    </p>
+                  )}
                   {e.staleReason && <p role="status">{e.staleReason}</p>}
                   {!e.searchComplete && (
                     <p>

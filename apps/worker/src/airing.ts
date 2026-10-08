@@ -6,6 +6,11 @@ import type {
   AiringEvidenceList,
   Render,
 } from "@twib/shared";
+import type { RenderTranscriptAsset } from "../../../packages/shared/src/render-transcripts";
+import {
+  getRenderTranscriptAsset,
+  selectRenderTranscriptAsset,
+} from "./render-transcripts";
 import { HttpError } from "./errors";
 import { fingerprint, getRender, operation } from "./store";
 import { getPublishedEdition } from "./publication";
@@ -29,6 +34,8 @@ export const airingInputSchema = z
     episodeId: id,
     renderArtifactHash: hash,
     sourceFingerprint: hash,
+    sourceTranscriptAssetId: id.optional(),
+    sourceTranscriptAssetHash: hash.optional(),
     episodeEditionFingerprint: hash,
     episodeTranscriptHash: hash,
     algorithmVersion: z.literal("bounded-passage-v1"),
@@ -66,6 +73,14 @@ export const airingInputSchema = z
   })
   .strict()
   .superRefine((v, ctx) => {
+    if (
+      Boolean(v.sourceTranscriptAssetId) !==
+      Boolean(v.sourceTranscriptAssetHash)
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "Transcript asset ID and hash must be supplied together.",
+      });
     if (
       (v.status === "CANDIDATE") !== v.passages.length > 0 ||
       (v.status === "CANDIDATE") !==
@@ -112,18 +127,45 @@ function sourceIdentity(render: Render) {
     durationMs: render.durationMs,
   };
 }
-export function airingSourceFingerprint(render: Render): Promise<string> {
-  return fingerprint(sourceIdentity(render));
+export function airingSourceFingerprint(
+  render: Render,
+  asset?: RenderTranscriptAsset | null,
+): Promise<string> {
+  return fingerprint(
+    asset
+      ? {
+          ...sourceIdentity(render),
+          sourceTranscriptAssetId: asset.id,
+          sourceTranscriptAssetHash: asset.assetHash,
+        }
+      : sourceIdentity(render),
+  );
 }
 async function freshness(
   db: D1Database,
   data: AiringEvidenceInput,
   render: Render,
+  owner: string,
 ): Promise<string | null> {
+  const asset = data.sourceTranscriptAssetId
+    ? await getRenderTranscriptAsset(db, data.sourceTranscriptAssetId, owner)
+    : null;
+  if (
+    data.sourceTranscriptAssetId &&
+    (!asset ||
+      asset.renderId !== render.id ||
+      asset.mediaSha256 !== render.artifactHash ||
+      asset.durationMs !== render.durationMs ||
+      asset.assetHash !== data.sourceTranscriptAssetHash)
+  )
+    return "Exact render transcript asset changed or is unavailable.";
+  const latest = await selectRenderTranscriptAsset(db, render, owner);
+  if (latest && latest.id !== asset?.id)
+    return "A newer exact-render transcript is current; this evidence remains historical.";
   if (
     !render.artifactHash ||
     render.artifactHash !== data.renderArtifactHash ||
-    (await airingSourceFingerprint(render)) !== data.sourceFingerprint
+    (await airingSourceFingerprint(render, asset)) !== data.sourceFingerprint
   )
     return "Source or exact render edition changed.";
   const current = await db
@@ -151,7 +193,7 @@ async function project(
   const data = JSON.parse(row.data) as AiringEvidenceInput & {
     createdAt: string;
   };
-  const staleReason = await freshness(db, data, render);
+  const staleReason = await freshness(db, data, render, row.owner);
   // Exact input idempotency key is stored separately in operation receipts.
   return {
     ...data,
@@ -178,7 +220,10 @@ export async function listAiringEvidence(
     .all<EvidenceRow>();
   return {
     renderId,
-    sourceFingerprint: await airingSourceFingerprint(render),
+    sourceFingerprint: await airingSourceFingerprint(
+      render,
+      await selectRenderTranscriptAsset(db, render, owner),
+    ),
     evidence: await Promise.all(
       rows.results.map((row) => project(db, row, render)),
     ),
@@ -220,13 +265,17 @@ export async function ingestAiringEvidence(
   const prior = await priorOperation(db, input.idempotencyKey, fp, owner);
   if (prior) return prior;
   const render = await getRender(db, input.renderId);
-  if (input.status === "CANDIDATE" && !render.mappingVerified)
+  if (
+    input.status === "CANDIDATE" &&
+    !render.mappingVerified &&
+    !input.sourceTranscriptAssetId
+  )
     throw new HttpError(
       422,
       "UNVERIFIED_MAPPING",
       "Candidate passages require verified render-relative transcript mapping.",
     );
-  const stale = await freshness(db, input, render);
+  const stale = await freshness(db, input, render, owner);
   if (stale) throw new HttpError(409, "STALE_EVIDENCE", stale);
   if (input.passages.some((p) => p.sourceRange.endMs > render.durationMs))
     throw new HttpError(
@@ -307,7 +356,12 @@ export async function decideAiringEvidence(
   const data = JSON.parse(row.data) as AiringEvidenceInput;
   // Clearing/undo remains possible for historical evidence; new confirmation cannot.
   if (["full", "partial"].includes(input.decision)) {
-    const stale = await freshness(db, data, await getRender(db, row.render_id));
+    const stale = await freshness(
+      db,
+      data,
+      await getRender(db, row.render_id),
+      owner,
+    );
     if (stale) throw new HttpError(409, "STALE_EVIDENCE", stale);
   }
   let decision = input.decision === "undo" ? "unknown" : input.decision;

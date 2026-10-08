@@ -17,6 +17,8 @@ export interface AiringEvidenceInput {
   episodeId: string;
   renderArtifactHash: string;
   sourceFingerprint: string;
+  sourceTranscriptAssetId?: string;
+  sourceTranscriptAssetHash?: string;
   episodeEditionFingerprint: string;
   episodeTranscriptHash: string;
   algorithmVersion: "bounded-passage-v1";
