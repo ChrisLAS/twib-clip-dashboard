@@ -52,6 +52,12 @@ beforeEach(async () => {
       "utf8",
     ),
   );
+  sqlite.exec(
+    readFileSync(
+      new URL("../migrations/0003_catalog_sync.sql", import.meta.url),
+      "utf8",
+    ),
+  );
   db = {
     prepare: (sql: string) => new Statement(sqlite, sql),
     batch: async (statements: Statement[]) => {
@@ -352,7 +358,8 @@ describe("immutable manifest version progression", () => {
           id: original.clipId,
           episodeId: "ep-demo",
           title: "The opening argument",
-          summary: "Synthetic example",
+          summary:
+            "Review the argument and its surrounding qualifications before an editorial decision.",
           narrativeRole: "establish",
           currentRenderId: `render-topic-one-v${version}`,
           renderIds: Array.from(

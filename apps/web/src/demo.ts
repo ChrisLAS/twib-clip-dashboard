@@ -50,12 +50,14 @@ export const demoEpisode: EpisodeDetail = {
   subtitle: "Fictional demonstration slate",
   clipCount: 5,
   publishedGuid: null,
+  catalogVersion: 0,
   observedAt: "2026-01-01T00:00:00Z",
   sync: { lastSuccessAt: null, lastError: null },
   clips: entries.map(
     ([id, speaker, title, publisher, durationMs, summary]): Clip => ({
       id: `clip-topic-${id}`,
       episodeId: "ep-demo",
+      catalogRevision: 0,
       title,
       summary,
       narrativeRole: "Suggested",

@@ -50,15 +50,19 @@ Every review belongs to an exact render ID. A new render starts unreviewed. Deci
 
 It does not run or resume a producer, create clips, heartbeat a stalled process, infer ready-to-air, manage Google sharing, or delete Drive files. Poll/refresh observes stored events; it cannot restart work. A missed producer expectation is “status unknown,” not proof of a crash. Full listening/lip-sync is independent of technical QA.
 
-## Import approved clips
+## Automatic catalog sync
 
-After owner sign-in and deployment configuration, use **Import approved clips** on the episode slate. This explicitly checks the server-configured private catalog and verifies each artifact; it does not accept a browser-supplied Sheet or Drive file ID. Duplicate clicks are disabled while the request is pending. Failures are shown without automatic retry; a timeout may have completed server-side, so refresh before retrying. Successfully imported immutable records are safe to recheck.
+After approved deployment configuration, the server checks its private producer Sheet every five minutes. Opening the dashboard loads the latest imported slate. Visible browser tabs poll only the lightweight, authenticated catalog status endpoint; browsers never call Google or trigger scheduled imports. Hidden tabs stop polling.
 
-After success, click **Refresh slate**. Once clips are present, the import panel collapses and stays collapsed after reload; use **Import more clips** to reopen it. Pending imports and errors remain visible until resolved or deliberately dismissed. Import never replaces the currently displayed review or clears drafts, and navigating into a clip does not cancel a submitted import. Leaving the page stops waiting for its response, but cannot undo work already received by the server. This action does not create clips or resume a producer.
+A catalog notice distinguishes new clips from updates to existing clips when a complete revision baseline is available. **Apply updates** refreshes the slate explicitly. An open review keeps its active render, playback and render-keyed drafts unchanged; return to the slate when ready to apply. Last successful sync, stale status and server/poll errors stay visible. “Last successful” means the catalog was checked, not that a new clip was produced.
+
+Manual **Import approved clips** remains inside collapsed **Troubleshooting** controls. It uses the same server-owned Sheet, allowlists and concurrency lease as the schedule. It is a recovery tool, not part of routine browsing. A timeout may have completed server-side; reconcile status before retrying. Successfully imported immutable records are safe to recheck. Neither sync nor the manual import creates clips or resumes a producer.
+
+See [producer append rules](docs/producer-contract.md) and the [sync deployment checklist](docs/catalog-sync.md). No credentials, private catalog identifiers, live media or owner data belong in this repository.
 
 ## API essentials
 
-GET `/api/session`, `/api/episodes`, `/api/episodes/:id`, `/api/renders/:id`, `/api/attempts/:id/events`, `/api/operations/:idempotencyKey`.
+GET `/api/catalog/status`, `/api/session`, `/api/episodes`, `/api/episodes/:id`, `/api/renders/:id`, `/api/attempts/:id/events`, `/api/operations/:idempotencyKey`.
 
 POST `/api/renders/:id/reviews`, `/api/clips/:id/visibility`, `/api/import`. Use same-origin JSON and `X-CSRF-Token` returned by the authenticated session. Review/visibility include `expectedRevision` and unique `idempotencyKey`. A timeout must reconcile GET operation before retrying the identical request. Reusing a key for changed content returns conflict. A stale revision requires refresh and a new deliberate decision.
 

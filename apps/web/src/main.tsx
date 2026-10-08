@@ -38,6 +38,8 @@ import { canSeekMedia, productionLabel } from "./review-state";
 import { readDraft, storeDraft } from "./drafts";
 import { ImportControl } from "./import-control";
 import { ClipThumbnail } from "./clip-thumbnail";
+import { CatalogSyncNotice } from "./catalog-sync-notice";
+import { preserveNewerReviews, SlateRequestGate } from "./catalog-sync";
 const labels: Record<Decision, string> = {
   up: "Approved",
   down: "Rejected",
@@ -70,62 +72,120 @@ function App() {
     } | null>(null);
   const [slateRevision, setSlateRevision] = useState(0);
   const mutationLock = useRef(false);
+  const slateRequests = useRef(new SlateRequestGate());
+  const selectedRef = useRef(selected);
+  const episodeRef = useRef(episode);
+  episodeRef.current = episode;
   const drafts = useRef(new Map<string, { note: string; reason: string }>());
   const scroll = useRef(0),
     openButton = useRef<HTMLElement | null>(null);
   const demo = isLocalDemo || session?.mode === "demo";
+  function cancelLoad() {
+    slateRequests.current.cancel();
+    setLoading(false);
+  }
   async function load() {
+    // A catalog refresh never swaps the render underneath an active review.
+    if (selectedRef.current || mutationLock.current) return;
+    const controller = slateRequests.current.begin();
+    if (!controller) return;
+    const canApply = () =>
+      slateRequests.current.isLatest(controller) &&
+      !selectedRef.current &&
+      !mutationLock.current;
+    const isCurrent = () =>
+      slateRequests.current.isCurrent(controller) && canApply();
     setLoading(true);
     setError("");
     try {
       if (isLocalDemo) {
-        setEpisode((previous) => previous ?? structuredClone(demoEpisode));
-        setSession({
-          csrfToken: "",
-          mode: "demo",
-          owner: "Local reviewer",
-          integrations: { drive: false, producer: false },
-        });
+        if (!isCurrent()) return;
+        setEpisode((previous) =>
+          canApply() ? (previous ?? structuredClone(demoEpisode)) : previous,
+        );
+        setSession((previous) =>
+          canApply()
+            ? {
+                csrfToken: "",
+                mode: "demo",
+                owner: "Local reviewer",
+                integrations: { drive: false, producer: false },
+              }
+            : previous,
+        );
       } else {
-        const s = await api.session();
-        setSession(s);
-        const eps = await api.episodes();
-        if (eps.length) setEpisode(await api.episode(eps[0].id));
-        else setEpisode(null);
+        const s = await api.session(controller.signal);
+        if (!isCurrent()) return;
+        setSession((previous) => (canApply() ? s : previous));
+        const eps = await api.episodes(controller.signal);
+        if (!isCurrent()) return;
+        const next = eps.length
+          ? await api.episode(eps[0].id, controller.signal)
+          : null;
+        if (!isCurrent()) return;
+        setEpisode((previous) =>
+          canApply()
+            ? next
+              ? preserveNewerReviews(previous, next)
+              : null
+            : previous,
+        );
       }
-      setSlateRevision((revision) => revision + 1);
+      setSlateRevision((revision) => (canApply() ? revision + 1 : revision));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to load the slate");
+      if (isCurrent())
+        setError((previous) =>
+          canApply()
+            ? e instanceof Error
+              ? e.message
+              : "Unable to load the slate"
+            : previous,
+        );
     } finally {
-      setLoading(false);
+      if (slateRequests.current.finish(controller)) setLoading(false);
     }
   }
   useEffect(() => {
     void load();
+    return () => slateRequests.current.cancel();
   }, []);
   useEffect(() => {
     const fn = () => {
-      const id = history.state?.clipId || null;
+      cancelLoad();
+      const requested = history.state?.clipId;
+      const id = episodeRef.current?.clips.some((clip) => clip.id === requested)
+        ? (requested as string)
+        : null;
+      selectedRef.current = id;
       setSelected(id);
-      if (!id) requestAnimationFrame(() => window.scrollTo(0, scroll.current));
+      setSaveError("");
+      if (!id)
+        requestAnimationFrame(() => {
+          if (!selectedRef.current) window.scrollTo(0, scroll.current);
+        });
     };
     window.addEventListener("popstate", fn);
     return () => window.removeEventListener("popstate", fn);
   }, []);
   function open(clip: Clip) {
-    if (!selected) {
+    cancelLoad();
+    if (!selectedRef.current) {
       scroll.current = window.scrollY;
       openButton.current = document.activeElement as HTMLElement;
     }
+    selectedRef.current = clip.id;
     setSelected(clip.id);
     setSaveError("");
     history.pushState({ clipId: clip.id }, "", `#clip/${clip.id}`);
     window.scrollTo(0, 0);
   }
   function back() {
+    cancelLoad();
+    selectedRef.current = null;
     setSelected(null);
     history.replaceState({}, "", location.pathname + location.search);
     requestAnimationFrame(() => {
+      if (selectedRef.current) return;
       window.scrollTo(0, scroll.current);
       openButton.current?.focus();
     });
@@ -145,6 +205,7 @@ function App() {
     isUndo = false,
   ) {
     if (mutationLock.current) return;
+    cancelLoad();
     mutationLock.current = true;
     setPending(true);
     setSaveError("");
@@ -209,6 +270,7 @@ function App() {
   }
   async function visibility(clip: Clip) {
     if (mutationLock.current) return;
+    cancelLoad();
     mutationLock.current = true;
     setPending(true);
     setSaveError("");
@@ -355,14 +417,35 @@ function App() {
       )}
       <main className={clip ? "review-main" : "slate-main"}>
         {!demo && session && (
-          <ImportControl
-            csrf={session.csrfToken}
-            ready={session.integrations.drive && session.integrations.producer}
-            hidden={!!clip}
-            hasClips={!!episode?.clips.length}
-            slateRevision={slateRevision}
-            onRefresh={() => void load()}
-          />
+          <>
+            <CatalogSyncNotice
+              episode={episode}
+              reviewing={!!clip}
+              loading={loading}
+              pending={pending}
+              onApply={() => void load()}
+              onCancel={cancelLoad}
+              onBack={back}
+            />
+            <details className="sync-troubleshooting" hidden={!!clip}>
+              <summary>Troubleshooting</summary>
+              <p>
+                Automatic sync checks the server-configured catalog. Use a
+                manual import only to troubleshoot a delayed sync.
+              </p>
+              <ImportControl
+                csrf={session.csrfToken}
+                ready={
+                  session.integrations.drive && session.integrations.producer
+                }
+                hidden={!!clip}
+                hasClips={!!episode?.clips.length}
+                slateRevision={slateRevision}
+                onRefresh={() => void load()}
+                refreshDisabled={pending || loading}
+              />
+            </details>
+          </>
         )}
         {demo && (
           <div className="demo-strip">
@@ -384,7 +467,12 @@ function App() {
               </strong>
               <p>{error}</p>
             </div>
-            <button onClick={load}>Try again</button>
+            <button
+              onClick={() => void load()}
+              disabled={loading || pending || !!clip}
+            >
+              Try again
+            </button>
             {!episode &&
               ["localhost", "127.0.0.1"].includes(location.hostname) && (
                 <a className="button" href="?demo=1">
@@ -406,7 +494,9 @@ function App() {
               Clips will appear after an authorized producer manifest is
               imported.
             </p>
-            <button onClick={load}>Refresh</button>
+            <button onClick={() => void load()} disabled={loading || pending}>
+              Refresh
+            </button>
           </div>
         ) : (
           episode && (
@@ -465,8 +555,8 @@ function App() {
                       </span>
                       <button
                         className="quiet"
-                        onClick={load}
-                        disabled={loading}
+                        onClick={() => void load()}
+                        disabled={loading || pending}
                       >
                         <RefreshCw
                           size={14}
@@ -474,6 +564,11 @@ function App() {
                         />
                         {loading ? "Refreshing…" : "Refresh slate"}
                       </button>
+                      {demo && loading && (
+                        <button className="quiet" onClick={cancelLoad}>
+                          Cancel refresh
+                        </button>
+                      )}
                     </div>
                   </div>
                   {demo && (
@@ -532,8 +627,10 @@ function App() {
                         </b>
                         <small>
                           {episode.sync.lastSuccessAt
-                            ? "Refresh checks stored events only"
-                            : "No live integration · producer status unknown"}
+                            ? "Latest applied slate · new updates appear above"
+                            : demo
+                              ? "No live integration · producer status unknown"
+                              : "Waiting for a successful catalog sync"}
                         </small>
                       </span>
                     </div>
@@ -763,7 +860,12 @@ function App() {
                 <div className="save-error" role="alert">
                   <TriangleAlert size={18} />
                   <span>{saveError}</span>
-                  <button onClick={load}>Refresh record</button>
+                  <button
+                    disabled={pending || loading}
+                    onClick={clip ? back : () => void load()}
+                  >
+                    {clip ? "Back to slate to refresh" : "Refresh slate"}
+                  </button>
                 </div>
               )}
               {notice && (

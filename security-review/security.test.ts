@@ -266,6 +266,7 @@ describe("Whole-worker boundary fixtures", () => {
     "/index.html",
     "/assets/app.js",
     "/api/episodes",
+    "/api/catalog/status",
     "/media/approved/original",
     "/media/approved/thumbnail",
   ])("denies unauthenticated %s before touching bindings", async (path) => {
@@ -278,6 +279,7 @@ describe("Whole-worker boundary fixtures", () => {
   it.each([
     "/",
     "/api/episodes",
+    "/api/catalog/status",
     "/media/approved/original",
     "/media/approved/thumbnail",
   ])("denies unconfigured %s", async (path) => {

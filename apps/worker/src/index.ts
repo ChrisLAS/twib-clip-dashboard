@@ -14,6 +14,7 @@ import { media } from "./media";
 import { googleConfigured } from "./google";
 import { pullManifest } from "./importer";
 import { seedDemo } from "./fixtures";
+import { catalogStatus } from "./catalog";
 const common = {
   expectedRevision: z.number().int().nonnegative(),
   idempotencyKey: z
@@ -46,6 +47,21 @@ async function body(request: Request): Promise<unknown> {
   }
 }
 export default {
+  scheduled(
+    _controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
+  ): void {
+    // No public endpoint or browser credentials are involved in this trigger.
+    ctx.waitUntil(
+      pullManifest(env).catch((error: unknown) => {
+        // Overlap is an expected no-op, not a failed run. Other failures have
+        // already been safely persisted and remain visible in Cron Past Events.
+        if (!(error instanceof HttpError && error.code === "SYNC_IN_PROGRESS"))
+          throw error;
+      }),
+    );
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
       const owner = await authenticate(request, env);
@@ -66,6 +82,8 @@ export default {
             producer: !!env.PRODUCER_SHEET_ID,
           },
         });
+      else if (path === "/api/catalog/status" && method === "GET")
+        result = json(await catalogStatus(env));
       else if (path === "/api/episodes" && method === "GET")
         result = json(await listEpisodes(env.DB));
       else if (/^\/api\/episodes\/[\w-]+$/.test(path) && method === "GET")
@@ -124,18 +142,7 @@ export default {
         );
       else if (path === "/api/import" && method === "POST") {
         await body(request);
-        try {
-          result = json(await pullManifest(env));
-        } catch (e) {
-          await env.DB.prepare("UPDATE sync_state SET last_error=? WHERE id=1")
-            .bind(
-              e instanceof HttpError
-                ? e.message
-                : "Producer import failed. Prior data preserved.",
-            )
-            .run();
-          throw e;
-        }
+        result = json(await pullManifest(env));
       } else if (
         !path.startsWith("/api/") &&
         !path.startsWith("/media/") &&
@@ -187,4 +194,4 @@ export default {
       );
     }
   },
-};
+} satisfies ExportedHandler<Env>;

@@ -76,6 +76,7 @@ export interface Render {
   review: Review;
 }
 export interface Clip {
+  catalogRevision: number;
   id: string;
   episodeId: string;
   title: string;
@@ -98,6 +99,7 @@ export interface Episode {
   publishedGuid: string | null;
 }
 export interface EpisodeDetail extends Episode {
+  catalogVersion: number;
   clips: Clip[];
   sync: { lastSuccessAt: string | null; lastError: string | null };
   observedAt: string;
@@ -137,4 +139,27 @@ export interface Session {
 export interface ApiError {
   error: { code: string; message: string };
   currentRevision?: number;
+}
+
+export interface CatalogClipRevision {
+  id: string;
+  episodeId: string;
+  revision: number;
+  currentRenderId: string;
+}
+export interface CatalogSyncState {
+  configured: boolean;
+  running: boolean;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  stale: boolean;
+  intervalSeconds: number;
+}
+export interface CatalogStatus {
+  complete: boolean;
+  version: number;
+  observedAt: string;
+  sync: CatalogSyncState;
+  clips: CatalogClipRevision[];
 }

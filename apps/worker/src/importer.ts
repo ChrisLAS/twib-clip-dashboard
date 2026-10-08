@@ -2,6 +2,13 @@ import { z } from "zod";
 import type { Env } from "./env";
 import { HttpError } from "./errors";
 import { googleToken, upstreamError } from "./google";
+import {
+  acquireSyncLease,
+  checkSyncDeadline,
+  readBoundedText,
+  syncFence,
+  SYNC_DEADLINE_MS,
+} from "./catalog";
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,120}$/);
 const time = z.iso.datetime({ offset: true });
 const ms = z.number().int().nonnegative();
@@ -146,72 +153,231 @@ export const manifestSchema = z
       .max(200),
   })
   .strict();
-// The only remote source is this server-configured private Sheet. Each A cell is one complete immutable JSON manifest.
-export async function pullManifest(env: Env): Promise<{ imported: number }> {
-  if (
-    !env.PRODUCER_SHEET_ID ||
-    !env.PRODUCER_SHEET_RANGE ||
-    !env.ALLOWED_EPISODE_IDS ||
-    !env.ALLOWED_DRIVE_FOLDER_IDS
-  )
-    throw new HttpError(
-      503,
-      "PRODUCER_UNCONFIGURED",
-      "The approved private producer Sheet and folder allowlists are not configured.",
-    );
-  const token = await googleToken(env);
-  const r = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(env.PRODUCER_SHEET_ID)}/values/${encodeURIComponent(env.PRODUCER_SHEET_RANGE)}`,
-    { headers: { Authorization: `Bearer ${token}` } },
+export async function hashText(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
   );
-  if (!r.ok) throw upstreamError(r.status);
-  const raw = await r.text();
-  if (raw.length > 2_000_000)
-    throw new HttpError(
-      413,
-      "IMPORT_TOO_LARGE",
-      "Producer data exceeds the import limit.",
-    );
-  const data = JSON.parse(raw) as { values?: unknown[][] };
-  let imported = 0;
-  for (const row of data.values ?? []) {
-    if (typeof row[0] !== "string") continue;
-    const parsed = manifestSchema.safeParse(JSON.parse(row[0]));
-    if (!parsed.success)
+  return Array.from(new Uint8Array(digest), (v) =>
+    v.toString(16).padStart(2, "0"),
+  ).join("");
+}
+// The only remote source is the existing server-configured private Sheet.
+// Cron and manual imports share this durable lease; nothing is request-selected.
+export async function pullManifest(
+  env: Env,
+  fetcher: typeof fetch = fetch,
+): Promise<{ imported: number; skipped: number }> {
+  const lease = await acquireSyncLease(env.DB);
+  const deadline = Date.now() + SYNC_DEADLINE_MS;
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), SYNC_DEADLINE_MS);
+  const boundedFetch: typeof fetch = async (input, init) => {
+    checkSyncDeadline(deadline);
+    const held = await env.DB.prepare(
+      "SELECT id FROM sync_state WHERE id=1 AND lease_owner=? AND lease_expires_at>?",
+    )
+      .bind(lease.owner, Date.now())
+      .first();
+    checkSyncDeadline(deadline);
+    if (!held)
       throw new HttpError(
-        422,
-        "INVALID_MANIFEST",
-        "Producer manifest is invalid. Correct the source record without rewriting imported events.",
+        503,
+        "SYNC_LEASE_LOST",
+        "Another catalog sync took over. This run stopped without replacing its state.",
       );
-    await importManifest(env, parsed.data, token);
-    imported++;
+    return fetcher(input, { ...init, signal: abort.signal });
+  };
+  try {
+    if (
+      !env.PRODUCER_SHEET_ID ||
+      !env.PRODUCER_SHEET_RANGE ||
+      !env.ALLOWED_EPISODE_IDS ||
+      !env.ALLOWED_DRIVE_FOLDER_IDS
+    )
+      throw new HttpError(
+        503,
+        "PRODUCER_UNCONFIGURED",
+        "The approved private producer Sheet and folder allowlists are not configured.",
+      );
+    const token = await googleToken(env, boundedFetch);
+    const response = await boundedFetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(env.PRODUCER_SHEET_ID)}/values/${encodeURIComponent(env.PRODUCER_SHEET_RANGE)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) throw upstreamError(response.status);
+    const raw = await readBoundedText(response, 2_000_000);
+    const sheetHash = await hashText(raw);
+    let imported = 0;
+    let skipped = 0;
+    if (sheetHash !== lease.sheetHash) {
+      let data: { values?: unknown[][] };
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw invalidManifest();
+      }
+      if (!data || (data.values !== undefined && !Array.isArray(data.values)))
+        throw invalidManifest();
+      if ((data.values?.length ?? 0) > 100)
+        throw new HttpError(
+          413,
+          "IMPORT_TOO_LARGE",
+          "The catalog exceeds 100 manifest rows. Archive accepted rows before adding more.",
+        );
+      let freshRows = 0;
+      let workUsed = 0;
+      let artifactsUsed = 0;
+      for (const row of data.values ?? []) {
+        checkSyncDeadline(deadline);
+        if (!Array.isArray(row)) throw invalidManifest();
+        if (row[0] === undefined || row[0] === "") continue;
+        if (typeof row[0] !== "string") throw invalidManifest();
+        const rowHash = await hashText(row[0]);
+        if (
+          await env.DB.prepare(
+            "SELECT hash FROM imported_sheet_rows WHERE hash=?",
+          )
+            .bind(rowHash)
+            .first()
+        ) {
+          skipped++;
+          continue;
+        }
+        // Bound changed work under the existing low CPU cap. Remaining rows
+        // resume safely next time from committed receipts, never from row numbers.
+        if (++freshRows > 4)
+          throw new HttpError(
+            503,
+            "SYNC_BUDGET_REACHED",
+            "Some catalog rows remain. The next scheduled check will continue safely.",
+          );
+        if (row[0].length > 256_000)
+          throw new HttpError(
+            413,
+            "IMPORT_TOO_LARGE",
+            "An unimported manifest exceeds the per-row limit. Split new work into smaller immutable manifests.",
+          );
+        let value: unknown;
+        try {
+          value = JSON.parse(row[0]);
+        } catch {
+          throw invalidManifest();
+        }
+        const parsed = manifestSchema.safeParse(value);
+        if (!parsed.success) throw invalidManifest();
+        const m = parsed.data;
+        // Conservative query weights include validation reads, writes, and
+        // artifact lease checks. Leave room below paid D1's 1000-query ceiling
+        // for all 100 receipt lookups, lease/status writes, and batch fences.
+        const work =
+          m.episodes.length * 2 +
+          m.clips.length * 3 +
+          m.renders.length * 3 +
+          m.events.length * 4 +
+          m.activations.length * 3 +
+          m.artifacts.length * 8 +
+          m.clips.reduce((total, clip) => total + clip.renderIds.length, 0) +
+          m.renders.reduce(
+            (total, render) => total + render.cues.length + render.qa.length,
+            0,
+          );
+        if (m.artifacts.length > 20 || work > 500)
+          throw new HttpError(
+            413,
+            "IMPORT_TOO_LARGE",
+            "An unimported manifest exceeds the work limit. Split new work into smaller immutable manifests.",
+          );
+        if (workUsed + work > 800 || artifactsUsed + m.artifacts.length > 20)
+          throw new HttpError(
+            503,
+            "SYNC_BUDGET_REACHED",
+            "Some catalog rows remain. The next scheduled check will continue safely.",
+          );
+        workUsed += work;
+        artifactsUsed += m.artifacts.length;
+        const changed = await importManifest(env, m, token, boundedFetch, {
+          leaseOwner: lease.owner,
+          rowHash,
+          deadline,
+        });
+        if (changed) imported++;
+        else skipped++;
+      }
+    }
+    checkSyncDeadline(deadline);
+    await env.DB.batch([
+      syncFence(env.DB, lease.owner),
+      env.DB.prepare(
+        "UPDATE sync_state SET last_success_at=?,last_error=NULL,sheet_hash=?,lease_owner=NULL,lease_expires_at=NULL WHERE id=1 AND lease_owner=?",
+      ).bind(new Date().toISOString(), sheetHash, lease.owner),
+    ]);
+    return { imported, skipped };
+  } catch (error) {
+    const failure = abort.signal.aborted
+      ? new HttpError(
+          503,
+          "SYNC_TIMEOUT",
+          "Catalog sync timed out. Committed clips are preserved; the next scheduled check will retry.",
+        )
+      : error;
+    // Losing the lease must never erase a successor's error or running status.
+    await env.DB.prepare(
+      "UPDATE sync_state SET last_error=?,lease_owner=NULL,lease_expires_at=NULL WHERE id=1 AND lease_owner=?",
+    )
+      .bind(
+        failure instanceof HttpError
+          ? failure.message
+          : "Catalog sync failed. Previously committed clips are preserved.",
+        lease.owner,
+      )
+      .run();
+    throw failure;
+  } finally {
+    clearTimeout(timer);
+    abort.abort();
   }
-  await env.DB.prepare(
-    "UPDATE sync_state SET last_success_at=?,last_error=NULL WHERE id=1",
-  )
-    .bind(new Date().toISOString())
-    .run();
-  return { imported };
+}
+function invalidManifest(): HttpError {
+  return new HttpError(
+    422,
+    "INVALID_MANIFEST",
+    "Producer manifest is invalid. Correct the source record without rewriting imported events.",
+  );
+}
+export interface ImportContext {
+  leaseOwner: string;
+  rowHash: string;
+  deadline: number;
 }
 export async function importManifest(
   env: Env,
   m: z.infer<typeof manifestSchema>,
   token: string,
   fetcher: typeof fetch = fetch,
-): Promise<void> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(JSON.stringify(m)),
-  );
-  const manifestHash = Array.from(new Uint8Array(digest), (v) =>
-    v.toString(16).padStart(2, "0"),
-  ).join("");
+  context?: ImportContext,
+): Promise<boolean> {
+  const checkpoint = () => {
+    if (context) checkSyncDeadline(context.deadline);
+  };
+  checkpoint();
+  const manifestHash = await hashText(JSON.stringify(m));
   if (
     await env.DB.prepare("SELECT hash FROM imported_manifests WHERE hash=?")
       .bind(manifestHash)
       .first()
-  )
-    return;
+  ) {
+    if (context) {
+      checkSyncDeadline(context.deadline);
+      await env.DB.batch([
+        syncFence(env.DB, context.leaseOwner),
+        env.DB.prepare(
+          "INSERT OR IGNORE INTO imported_sheet_rows(hash) VALUES(?)",
+        ).bind(context.rowHash),
+      ]);
+    }
+    return false;
+  }
   const duplicate = (values: string[]) =>
     new Set(values).size !== values.length;
   if (
@@ -242,6 +408,7 @@ export async function importManifest(
         .first<{ clip_id: string }>()
     )?.clip_id;
   for (const c of m.clips) {
+    checkpoint();
     if (!c.renderIds.includes(c.currentRenderId))
       throw new HttpError(
         422,
@@ -257,6 +424,7 @@ export async function importManifest(
         );
   }
   for (const r of m.renders) {
+    checkpoint();
     const episode = await clipEpisode(r.clipId);
     if (
       !episode ||
@@ -269,6 +437,7 @@ export async function importManifest(
       );
   }
   for (const a of m.artifacts) {
+    checkpoint();
     const clip = await renderClip(a.renderId);
     const episode = clip ? await clipEpisode(clip) : undefined;
     if (
@@ -283,6 +452,7 @@ export async function importManifest(
   }
   const attemptOwners = new Map<string, string>();
   for (const e of m.events) {
+    checkpoint();
     const episode = await clipEpisode(e.clipId);
     if (
       !episode ||
@@ -308,6 +478,7 @@ export async function importManifest(
     attemptOwners.set(e.attemptId, e.clipId);
   }
   for (const a of m.activations) {
+    checkpoint();
     const owner =
       attemptOwners.get(a.attemptId) ??
       (
@@ -335,6 +506,7 @@ export async function importManifest(
       "Manifest references an episode outside the allowlist.",
     );
   for (const a of m.artifacts) {
+    checkpoint();
     if (a.kind === "original") {
       const render =
         m.renders.find((r) => r.id === a.renderId) ??
@@ -387,6 +559,7 @@ export async function importManifest(
     extra: unknown[],
     sql: string,
   ) {
+    checkpoint();
     const old = await env.DB.prepare(`SELECT data FROM ${table} WHERE id=?`)
       .bind(key)
       .first<{ data: string }>();
@@ -407,16 +580,27 @@ export async function importManifest(
       "INSERT OR IGNORE INTO episodes VALUES(?,?)",
     );
   for (const c of m.clips) {
+    checkpoint();
     const old = await env.DB.prepare(
       "SELECT data,episode_id FROM clips WHERE id=?",
     )
       .bind(c.id)
       .first<{ data: string; episode_id: string }>();
     if (old) {
-      const previous = JSON.parse(old.data) as {
-        renderIds: string[];
-        currentRenderId: string;
-      };
+      const previous = JSON.parse(old.data) as z.infer<
+        typeof manifestSchema
+      >["clips"][number];
+      if (
+        ["title", "summary", "narrativeRole"].some(
+          (key) =>
+            previous[key as keyof typeof previous] !== c[key as keyof typeof c],
+        )
+      )
+        throw new HttpError(
+          409,
+          "IMMUTABLE_CONFLICT",
+          "Imported clip metadata changed. Create a new clip ID; metadata correction events are not supported.",
+        );
       if (old.episode_id !== c.episodeId)
         throw new HttpError(
           409,
@@ -483,6 +667,7 @@ export async function importManifest(
       "INSERT OR IGNORE INTO renders(id,clip_id,data) VALUES(?,?,?)",
     );
   for (const a of m.artifacts) {
+    checkpoint();
     const old = await env.DB.prepare(
       "SELECT file_id,size,sha256 FROM artifacts WHERE render_id=? AND kind=?",
     )
@@ -506,6 +691,7 @@ export async function importManifest(
     );
   }
   for (const e of m.events) {
+    checkpoint();
     if (Date.parse(e.occurredAt) > Date.now() + 300000)
       throw new HttpError(
         422,
@@ -541,5 +727,15 @@ export async function importManifest(
       "INSERT OR IGNORE INTO imported_manifests(hash,imported_at) VALUES(?,?)",
     ).bind(manifestHash, new Date().toISOString()),
   );
+  if (context) {
+    checkSyncDeadline(context.deadline);
+    statements.unshift(syncFence(env.DB, context.leaseOwner));
+    statements.push(
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO imported_sheet_rows(hash) VALUES(?)",
+      ).bind(context.rowHash),
+    );
+  }
   await env.DB.batch(statements);
+  return true;
 }

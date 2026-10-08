@@ -3,6 +3,12 @@ main = "src/index.ts"
 compatibility_date = "2026-10-01"
 workers_dev = false
 preview_urls = false
+# Preserve the existing production CPU ceiling. Profile changed-row imports
+# before enabling production cron; scheduling does not grant extra CPU.
+[limits]
+cpu_ms = 50
+[triggers]
+crons = ["*/5 * * * *"]
 [assets]
 directory = "../web/dist"
 binding = "ASSETS"
@@ -24,3 +30,7 @@ binding = "DB"
 database_name = "twib-review-local"
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
+
+# Do not poll real catalog data in local demo mode.
+[env.local.triggers]
+crons = []

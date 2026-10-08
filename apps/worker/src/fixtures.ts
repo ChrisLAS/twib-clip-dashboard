@@ -84,6 +84,7 @@ export async function seedDemo(db: D1Database): Promise<void> {
       },
     };
     const clip: Clip = {
+      catalogRevision: 0,
       id,
       episodeId: episode.id,
       title,

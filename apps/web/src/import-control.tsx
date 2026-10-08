@@ -9,6 +9,7 @@ export function ImportControl({
   hasClips,
   slateRevision,
   onRefresh,
+  refreshDisabled,
 }: {
   csrf: string;
   ready: boolean;
@@ -16,6 +17,7 @@ export function ImportControl({
   hasClips: boolean;
   slateRevision: number;
   onRefresh: () => void;
+  refreshDisabled: boolean;
 }) {
   const [state, setState] = useState<"idle" | "pending" | "success" | "error">(
     "idle",
@@ -39,12 +41,12 @@ export function ImportControl({
     setState("pending");
     setMessage("Checking the approved catalog and verifying clip files…");
     try {
-      const result = await api.importApproved(csrf, controller.signal);
+      await api.importApproved(csrf, controller.signal);
       if (controller.signal.aborted) return;
       setCompletedAt(revision.current);
       setState("success");
       setMessage(
-        `Import complete: ${result.imported} catalog record${result.imported === 1 ? "" : "s"} checked. Refresh the slate to see updates. Existing reviews and drafts are preserved.`,
+        "Catalog check complete. Refresh the slate to see any imported clips. Existing reviews and drafts are preserved.",
       );
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -111,7 +113,11 @@ export function ImportControl({
             : "Import approved clips"}
         </button>
         {activeResult && (state === "success" || state === "error") && (
-          <button className="quiet" onClick={onRefresh}>
+          <button
+            className="quiet"
+            onClick={onRefresh}
+            disabled={refreshDisabled}
+          >
             Refresh slate
           </button>
         )}

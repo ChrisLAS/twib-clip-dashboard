@@ -2087,3 +2087,106 @@ select {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.catalog-sync {
+  margin-bottom: 14px;
+  border: 1px solid #34434c;
+  border-radius: 10px;
+  background: #19232b;
+  padding: 12px 16px;
+}
+.catalog-sync-summary,
+.catalog-update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  flex-wrap: wrap;
+}
+.catalog-sync-summary > span,
+.catalog-sync-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.catalog-sync-summary > span {
+  font-size: 12px;
+  font-weight: 550;
+}
+.catalog-sync-summary small {
+  color: #b5c2ca;
+  font-size: 11px;
+}
+.catalog-sync-warning {
+  align-items: flex-start;
+  color: #e4bd89;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 10px 0 0;
+  overflow-wrap: anywhere;
+}
+.catalog-sync-warning svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.catalog-update-banner {
+  border-top: 1px solid #42515b;
+  padding-top: 12px;
+  margin-top: 12px;
+}
+.catalog-update-banner strong {
+  color: #f1d1b5;
+  font-size: 13px;
+}
+.catalog-update-banner p,
+.sync-troubleshooting > p {
+  margin: 5px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #b5c2ca;
+  max-width: 75ch;
+}
+.catalog-update-actions {
+  display: flex;
+  gap: 10px;
+}
+.sync-troubleshooting {
+  margin: 0 0 18px;
+}
+.sync-troubleshooting[hidden] {
+  display: none;
+}
+.sync-troubleshooting summary {
+  cursor: pointer;
+  color: #bdc7ce;
+  font-size: 12px;
+  padding: 8px 0;
+  width: fit-content;
+}
+.sync-troubleshooting summary:focus-visible {
+  outline: 2px solid #d79563;
+  outline-offset: 4px;
+}
+.sync-troubleshooting .import-control {
+  margin: 12px 0 0;
+}
+.sync-troubleshooting .import-shortcut {
+  justify-content: flex-start;
+  margin: 8px 0 0;
+}
+@media (max-width: 540px) {
+  .catalog-sync {
+    padding: 12px;
+  }
+  .catalog-sync-summary,
+  .catalog-update-banner {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .catalog-update-banner button,
+  .catalog-sync-summary button,
+  .sync-troubleshooting summary {
+    min-height: 44px;
+  }
+}

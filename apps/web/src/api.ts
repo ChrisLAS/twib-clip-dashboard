@@ -1,4 +1,5 @@
 import type {
+  CatalogStatus,
   Episode,
   EpisodeDetail,
   Session,
@@ -56,10 +57,22 @@ export const api = {
       );
     }
   },
-  session: () => request<Session>("/api/session"),
-  episodes: () => request<Episode[]>("/api/episodes"),
-  episode: (id: string) =>
-    request<EpisodeDetail>(`/api/episodes/${encodeURIComponent(id)}`),
+  catalogStatus: (signal?: AbortSignal) =>
+    request<CatalogStatus>("/api/catalog/status", {
+      cache: "no-store",
+      ...(signal
+        ? { signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]) }
+        : {}),
+    }),
+  session: (signal?: AbortSignal) =>
+    request<Session>("/api/session", readOptions(signal)),
+  episodes: (signal?: AbortSignal) =>
+    request<Episode[]>("/api/episodes", readOptions(signal)),
+  episode: (id: string, signal?: AbortSignal) =>
+    request<EpisodeDetail>(
+      `/api/episodes/${encodeURIComponent(id)}`,
+      readOptions(signal),
+    ),
   review: (id: string, body: ReviewInput, csrf: string) =>
     mutate<Review>(
       `/api/renders/${encodeURIComponent(id)}/reviews`,
@@ -73,6 +86,14 @@ export const api = {
       csrf,
     ),
 };
+function readOptions(signal?: AbortSignal): RequestInit {
+  return {
+    cache: "no-store",
+    ...(signal
+      ? { signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]) }
+      : {}),
+  };
+}
 async function mutate<T>(
   path: string,
   body: ReviewInput | VisibilityInput,

@@ -12,6 +12,8 @@ import type {
 import { HttpError } from "./errors";
 interface Row {
   id: string;
+  catalog_revision: number;
+  catalog_version: number;
   data: string;
   revision: number;
   decision: Review["decision"];
@@ -103,21 +105,30 @@ export async function getRender(db: D1Database, id: string): Promise<Render> {
 }
 export async function listEpisodes(db: D1Database): Promise<Episode[]> {
   const r = await db
-    .prepare("SELECT data FROM episodes ORDER BY id DESC")
-    .all<{ data: string }>();
-  return r.results.map((v) => JSON.parse(v.data));
+    .prepare(
+      "SELECT data,(SELECT count(*) FROM clips WHERE episode_id=episodes.id) AS clip_count FROM episodes ORDER BY id DESC",
+    )
+    .all<{ data: string; clip_count: number }>();
+  return r.results.map((v) => ({
+    ...JSON.parse(v.data),
+    clipCount: v.clip_count,
+  }));
 }
 export async function getEpisode(
   db: D1Database,
   id: string,
 ): Promise<EpisodeDetail> {
   const row = await db
-    .prepare("SELECT data FROM episodes WHERE id=?")
+    .prepare(
+      "SELECT data,(SELECT version FROM sync_state WHERE id=1) AS catalog_version FROM episodes WHERE id=?",
+    )
     .bind(id)
-    .first<{ data: string }>();
+    .first<{ data: string; catalog_version: number }>();
   if (!row) throw new HttpError(404, "NOT_FOUND", "Episode not found.");
   const rows = await db
-    .prepare("SELECT * FROM clips WHERE episode_id=? ORDER BY id")
+    .prepare(
+      "SELECT clips.*,sync_state.version AS catalog_version FROM clips CROSS JOIN sync_state WHERE episode_id=? AND sync_state.id=1 ORDER BY clips.id",
+    )
     .bind(id)
     .all<Row>();
   const clips = await Promise.all(
@@ -149,6 +160,7 @@ export async function getEpisode(
       }
       return {
         ...base,
+        catalogRevision: r.catalog_revision ?? 0,
         visibility: r.visibility,
         visibilityRevision: r.revision,
         render,
@@ -162,6 +174,9 @@ export async function getEpisode(
   return {
     ...JSON.parse(row.data),
     clips,
+    clipCount: clips.length,
+    catalogVersion:
+      rows.results[0]?.catalog_version ?? row.catalog_version ?? 0,
     observedAt: new Date().toISOString(),
     sync: {
       lastSuccessAt: sync?.last_success_at ?? null,
