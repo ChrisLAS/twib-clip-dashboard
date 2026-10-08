@@ -900,9 +900,10 @@ try {
   await page
     .locator("#review-note")
     .fill("Keep this automatic-sync review draft");
-  await page
-    .getByLabel("Reason", { exact: true })
-    .selectOption("Needs context");
+  // The wrapping Reason label also contains option text. Scope the actual
+  // native select by its form row instead of exact-matching that label's text.
+  const reviewReason = page.locator(".reason-row").getByRole("combobox");
+  await reviewReason.selectOption("Needs context");
   await page.locator("video").evaluate((video) => {
     video.dataset.catalogProbe = "original-review";
     video.currentTime = 6;
@@ -965,8 +966,7 @@ try {
     "Catalog update preserves unsaved note, reason and typing focus",
     (await page.locator("#review-note").inputValue()) ===
       "Keep this automatic-sync review draft" &&
-      (await page.getByLabel("Reason", { exact: true }).inputValue()) ===
-        "Needs context" &&
+      (await reviewReason.inputValue()) === "Needs context" &&
       (await page
         .locator("#review-note")
         .evaluate((note) => note === document.activeElement)),
