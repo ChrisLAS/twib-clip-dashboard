@@ -230,6 +230,7 @@ export function EditorialPanel({
               <label>
                 Scope{" "}
                 <select
+                  aria-label="Scope"
                   value={draft.scope}
                   disabled={disabled || !!editId}
                   onChange={(e) =>
