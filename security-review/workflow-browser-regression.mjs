@@ -420,6 +420,12 @@ export async function runPublicationBrowserRegression({ page, check }) {
   const status = {
     configured: true,
     running: false,
+    rollover: {
+      enabled: true,
+      issue:
+        "Host selected another active workspace; no workspace was changed.",
+      lastCompletedAt: null,
+    },
     lastAttemptAt: "2026-10-08T00:00:00Z",
     lastSuccessAt: "2026-10-08T00:00:00Z",
     lastScheduledSuccessAt: null,
@@ -461,6 +467,23 @@ export async function runPublicationBrowserRegression({ page, check }) {
       "Publication blocked transcript is visible independently of ready chapters",
       (await panel.getByText(/transcript: blocked/).isVisible()) &&
         (await panel.getByText(/chapters: ready/).isVisible()),
+    );
+    check(
+      "Publication rollover issue is visible without claiming completion",
+      (await panel
+        .getByText("Automatic workspace advance: Enabled", { exact: true })
+        .isVisible()) &&
+        (await panel
+          .getByText("Last completed workspace advance: Not observed yet", {
+            exact: true,
+          })
+          .isVisible()) &&
+        (await panel
+          .getByText(
+            "Workspace advance: Host selected another active workspace; no workspace was changed.",
+            { exact: true },
+          )
+          .isVisible()),
     );
     check(
       "Manual metadata success does not claim scheduled success",

@@ -94,6 +94,13 @@ export function parseFeed(xml: string): FeedEpisode[] {
   const items = channel.children.filter((n) => n.name === "item");
   if (items.length > 500) throw new Error("RSS exceeds episode limit");
   const result = items.map((item) => {
+    for (const name of ["guid", "itunes:episode"]) {
+      const identities = item.children
+        .filter((node) => node.name === name)
+        .map((node) => node.text.trim());
+      if (new Set(identities).size > 1)
+        throw new Error("Conflicting RSS episode identity fields");
+    }
     const text = (name: string) =>
       item.children.find((n) => n.name === name)?.text.trim() ?? "";
     const guid = text("guid"),

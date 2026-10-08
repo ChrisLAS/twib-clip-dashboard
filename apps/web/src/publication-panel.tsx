@@ -118,6 +118,27 @@ export function PublicationPanel({
                       </li>
                     ))}
                   </ul>
+                  {status.rollover && (
+                    <>
+                      <p>
+                        Automatic workspace advance:{" "}
+                        {status.rollover.enabled ? "Enabled" : "Disabled"}
+                      </p>
+                      <p>
+                        Last completed workspace advance:{" "}
+                        {status.rollover.lastCompletedAt
+                          ? new Date(
+                              status.rollover.lastCompletedAt,
+                            ).toLocaleString()
+                          : "Not observed yet"}
+                      </p>
+                      {status.rollover.issue && (
+                        <p role="status">
+                          Workspace advance: {status.rollover.issue}
+                        </p>
+                      )}
+                    </>
+                  )}
                   {status.lastError && <p role="status">{status.lastError}</p>}
                   <p>
                     Episode media bytes have not been fingerprinted. Airing

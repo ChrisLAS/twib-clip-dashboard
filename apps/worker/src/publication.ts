@@ -26,6 +26,7 @@ export function nextPublicationCheck(now: number): number {
 const LEASE = 90000;
 const DEADLINE = 45000;
 interface SyncRow {
+  rollover_issue: string | null;
   last_attempt_at: string | null;
   last_success_at: string | null;
   last_scheduled_success_at: string | null;
@@ -393,6 +394,21 @@ async function episodeId(
     .all<{ id: string }>();
   return rows.results.length === 1 ? rows.results[0].id : null;
 }
+interface RolloverSnapshot {
+  workspace_version: number;
+  catalog_version: number;
+  active_id: string | null;
+  active_revision: number | null;
+}
+async function rolloverSnapshot(db: D1Database): Promise<RolloverSnapshot> {
+  return (await db
+    .prepare(
+      `SELECT w.version AS workspace_version,s.version AS catalog_version,
+    a.id AS active_id,a.revision AS active_revision FROM workspace_state w
+    JOIN sync_state s ON s.id=w.id LEFT JOIN episode_workspaces a ON a.is_active=1 WHERE w.id=1`,
+    )
+    .first<RolloverSnapshot>())!;
+}
 async function saveEpisode(
   env: PublicationEnv,
   owner: string,
@@ -400,7 +416,9 @@ async function saveEpisode(
   item: FeedEpisode,
   transcript: AssetRow,
   chapters: AssetRow,
-): Promise<void> {
+  snapshot: RolloverSnapshot | null,
+  feed: FeedEpisode[],
+): Promise<string | null> {
   const mappedId = await episodeId(env.DB, item.episodeNumber);
   const transcriptHash = transcript.hash,
     chaptersHash = chapters.hash;
@@ -450,30 +468,52 @@ async function saveEpisode(
       "UPDATE publication_sync SET latest_guid=?,feed_id=? WHERE id=1",
     ).bind(item.guid, feedId),
   ];
-  // Opt-in rollover only creates an empty, inactive next draft. The host's active
-  // workspace, uploaded media, notes and existing draft title are never changed.
-  if (
-    env.PUBLICATION_AUTO_ROLLOVER === "true" &&
-    mappedId &&
-    item.episodeNumber !== null
-  ) {
-    const next = item.episodeNumber + 1,
-      id = "twib-" + next;
-    const draft = JSON.stringify({
-      id,
-      number: next,
-      title: "TWiB " + next,
-      subtitle: "",
-      clipCount: 0,
-      publishedGuid: null,
-    });
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO episode_workspaces(id,data,status,is_active) SELECT ?,?,'draft',0 WHERE NOT EXISTS(SELECT 1 FROM episode_workspaces WHERE json_extract(data,'$.number')=?) AND NOT EXISTS(SELECT 1 FROM episodes WHERE json_extract(data,'$.number')=?) ON CONFLICT(id) DO NOTHING`,
-      ).bind(id, draft, next, next),
-    );
+  let rolloverIssue: string | null = null;
+  let operationId: string | null = null;
+  if (snapshot) {
+    const ambiguous =
+      item.episodeNumber === null ||
+      !mappedId ||
+      feed.filter((entry) => entry.episodeNumber === item.episodeNumber)
+        .length !== 1;
+    if (ambiguous) {
+      rolloverIssue =
+        "Automatic rollover skipped: publication number or workspace mapping is ambiguous.";
+    } else if (snapshot.active_id === mappedId) {
+      operationId = crypto.randomUUID();
+      statements.push(
+        env.DB.prepare(
+          `INSERT OR IGNORE INTO publication_rollovers(
+        id,feed_id,guid,episode_id,episode_number,next_id,workspace_version,catalog_version,active_revision,created_at)
+        VALUES(?,?,?,?,?,coalesce((SELECT id FROM publication_workspace_numbers WHERE json_extract(data,'$.number')=? LIMIT 1),?),?,?,?,?)`,
+        ).bind(
+          operationId,
+          feedId,
+          item.guid,
+          mappedId,
+          item.episodeNumber,
+          item.episodeNumber! + 1,
+          "twib-" + (item.episodeNumber! + 1),
+          snapshot.workspace_version,
+          snapshot.catalog_version,
+          snapshot.active_revision,
+          new Date().toISOString(),
+        ),
+      );
+    }
   }
   await env.DB.batch(statements);
+  if (operationId) {
+    const receipt = await env.DB.prepare(
+      "SELECT id FROM publication_rollovers WHERE feed_id=? AND guid=? AND episode_id=?",
+    )
+      .bind(feedId, item.guid, mappedId)
+      .first<{ id: string }>();
+    if (!receipt)
+      rolloverIssue =
+        "Automatic rollover skipped: the workspace changed, publication identity conflicts, or the next draft is ambiguous. Review the active workspace before retrying.";
+  }
+  return rolloverIssue;
 }
 export async function publicationStatus(
   env: PublicationEnv,
@@ -526,7 +566,15 @@ export async function publicationStatus(
           .first<{ data: string }>()
       : null;
   const running = !!row.lease_owner && (row.lease_expires_at ?? 0) > Date.now();
+  const completed = await env.DB.prepare(
+    "SELECT max(created_at) AS at FROM publication_rollovers",
+  ).first<{ at: string | null }>();
   return {
+    rollover: {
+      enabled: env.PUBLICATION_AUTO_ROLLOVER === "true",
+      issue: row.rollover_issue,
+      lastCompletedAt: completed?.at ?? null,
+    },
     configured: publicationConfigured(env),
     running,
     lastAttemptAt: row.last_attempt_at,
@@ -582,6 +630,10 @@ export async function syncPublication(
     .first<{ id: number }>();
   if (!lease) return publicationStatus(env);
   try {
+    const snapshot =
+      env.PUBLICATION_AUTO_ROLLOVER === "true"
+        ? await rolloverSnapshot(env.DB)
+        : null;
     const deadline = now + DEADLINE;
     const feedId = await sha256(env.PUBLICATION_FEED_URL!);
     const rss = await asset(
@@ -593,7 +645,8 @@ export async function syncPublication(
       deadline,
     );
     if (!rss.parsed) throw new Error("RSS unavailable");
-    const latest = (JSON.parse(rss.parsed) as FeedEpisode[])[0];
+    const feed = JSON.parse(rss.parsed) as FeedEpisode[];
+    const latest = feed[0];
     if (!latest) throw new Error("RSS has no episodes");
     const prefix = feedId + ":" + (await sha256(latest.guid));
     // Independent results: one blocked/malformed asset cannot prevent the other.
@@ -613,14 +666,23 @@ export async function syncPublication(
       latest.chaptersUrl,
       deadline,
     );
-    await saveEpisode(env, owner, feedId, latest, transcript, chapters);
+    const rolloverIssue = await saveEpisode(
+      env,
+      owner,
+      feedId,
+      latest,
+      transcript,
+      chapters,
+      snapshot,
+      feed,
+    );
     const errors = [rss, transcript, chapters].filter(
       (a) => a.state === "blocked" || a.state === "error",
     );
     await env.DB.batch([
       fence(env.DB, owner),
       env.DB.prepare(
-        "UPDATE publication_sync SET last_success_at=coalesce(?,last_success_at),last_scheduled_success_at=coalesce(?,last_scheduled_success_at),last_error=?,lease_owner=NULL,lease_expires_at=NULL WHERE id=1 AND lease_owner=?",
+        "UPDATE publication_sync SET last_success_at=coalesce(?,last_success_at),last_scheduled_success_at=coalesce(?,last_scheduled_success_at),last_error=?,rollover_issue=?,lease_owner=NULL,lease_expires_at=NULL WHERE id=1 AND lease_owner=?",
       ).bind(
         rss.state === "ready" ? new Date().toISOString() : null,
         rss.state === "ready" && !options.force
@@ -629,6 +691,7 @@ export async function syncPublication(
         errors.length
           ? "Publication metadata updated; some assets need attention. See individual asset status."
           : null,
+        rolloverIssue,
         owner,
       ),
     ]);

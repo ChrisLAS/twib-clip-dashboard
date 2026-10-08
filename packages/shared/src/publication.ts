@@ -25,6 +25,11 @@ export interface PublishedEdition {
 }
 export interface PublicationStatus {
   configured: boolean;
+  rollover: {
+    enabled: boolean;
+    issue: string | null;
+    lastCompletedAt: string | null;
+  };
   running: boolean;
   lastAttemptAt: string | null;
   lastSuccessAt: string | null;
