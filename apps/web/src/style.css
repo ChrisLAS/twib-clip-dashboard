@@ -2642,3 +2642,7 @@ button.primary-action:hover {
   display: grid;
   gap: 10px;
 }
+
+.airing-identity p {
+  overflow-wrap: anywhere;
+}

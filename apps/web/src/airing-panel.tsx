@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import type { AiringDecisionInput, AiringEvidenceList } from "@twib/shared";
+import type {
+  AiringDecisionInput,
+  AiringEvidenceList,
+  Episode,
+} from "@twib/shared";
 import { timecode } from "./api";
+import { airingTargetLabel, shortFingerprint } from "./airing-target";
 interface Pending {
   evidenceId: string;
   input: AiringDecisionInput;
@@ -9,10 +14,12 @@ export function AiringPanel({
   csrf,
   renderId,
   demo,
+  episodes = [],
 }: {
   csrf: string;
   renderId: string;
   demo: boolean;
+  episodes?: Episode[];
 }) {
   const storageKey = `twib-airing-${demo ? "demo" : "live"}-${renderId}`;
   const [open, setOpen] = useState(false),
@@ -173,7 +180,32 @@ export function AiringPanel({
                 </p>
               )}
               {data?.evidence.map((e) => (
-                <article className="airing-evidence" key={e.id}>
+                <article
+                  className="airing-evidence"
+                  key={e.id}
+                  aria-label={`Airing evidence for ${e.episodeId}, edition ${shortFingerprint(e.episodeEditionFingerprint)}`}
+                >
+                  <p>
+                    <strong>
+                      Target: {airingTargetLabel(e.episodeId, episodes)}
+                    </strong>
+                  </p>
+                  <p>
+                    Publication edition:{" "}
+                    {shortFingerprint(e.episodeEditionFingerprint)} · Transcript
+                    version: {shortFingerprint(e.episodeTranscriptHash)} ·{" "}
+                    {e.freshness}
+                  </p>
+                  <details className="airing-identity">
+                    <summary>Full publication fingerprints</summary>
+                    <p>Episode ID: {e.episodeId}</p>
+                    <p>Publication edition: {e.episodeEditionFingerprint}</p>
+                    <p>Published transcript: {e.episodeTranscriptHash}</p>
+                    <p>
+                      Render transcript/source:{" "}
+                      {e.sourceTranscriptAssetHash ?? e.sourceFingerprint}
+                    </p>
+                  </details>
                   <p>
                     <strong>
                       {e.status === "CANDIDATE"
@@ -223,8 +255,10 @@ export function AiringPanel({
                         setVerified(event.target.checked ? e.id : null)
                       }
                     />{" "}
-                    I compared this exact clip render with published playback
-                    for this evidence’s episode edition.
+                    I compared this exact clip render with published playback of
+                    episode {e.episodeId}, edition{" "}
+                    {shortFingerprint(e.episodeEditionFingerprint)}, transcript{" "}
+                    {shortFingerprint(e.episodeTranscriptHash)}.
                   </label>
                   <div className="workflow-actions">
                     {(["full", "partial", "unknown", "undo"] as const).map(
@@ -257,7 +291,7 @@ export function AiringPanel({
                             ? "Undo confirmation"
                             : decision === "unknown"
                               ? "Mark unknown"
-                              : `Confirm ${decision} use`}
+                              : `Confirm ${decision} use in ${e.episodeId}`}
                         </button>
                       ),
                     )}

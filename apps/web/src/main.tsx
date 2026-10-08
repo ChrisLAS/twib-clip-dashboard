@@ -766,6 +766,7 @@ function App() {
                   key={`airing-${clip.render.id}`}
                   csrf={session?.csrfToken ?? ""}
                   renderId={clip.render.id}
+                  episodes={episodes}
                   demo={!!demo}
                 />
               )}

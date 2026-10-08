@@ -1044,7 +1044,7 @@ try {
     episodeId: "ep-demo",
   });
   await page
-    .locator("details[open].workflow-panel summary")
+    .locator("details[open].workflow-panel > summary")
     .evaluateAll((nodes) => nodes.forEach((node) => node.click()));
   await page.locator("#review-note").fill("Keep this draft");
   await page.reload();
