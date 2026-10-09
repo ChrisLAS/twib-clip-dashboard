@@ -10,9 +10,9 @@
     "dev": "npm run dev -w apps/web",
     "dev:worker": "wrangler dev --config apps/worker/wrangler.toml --env local",
     "db:local": "wrangler d1 migrations apply twib-review-local --local --config apps/worker/wrangler.toml --env local",
-    "build": "npm run build -w apps/web && wrangler deploy --dry-run --env \"\" --config apps/worker/wrangler.toml --outdir dist/worker",
-    "typecheck": "tsc --noEmit && npm run typecheck -w apps/web",
-    "lint": "eslint apps/worker packages/shared packages/matching security-review && npm run lint --if-present -w apps/web",
+    "build": "npm run build -w apps/web && wrangler deploy --dry-run --env \"\" --config apps/worker/wrangler.toml --outdir dist/worker && wrangler deploy --dry-run --config apps/mcp-probe/wrangler.jsonc --outdir dist/mcp-probe",
+    "typecheck": "tsc --noEmit && npm run typecheck -w apps/web && npm run typecheck -w apps/mcp-probe",
+    "lint": "eslint apps/worker apps/mcp-probe/src apps/mcp-probe/test packages/shared packages/matching security-review && npm run lint --if-present -w apps/web",
     "test": "vitest run",
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
     "test:browser": "node security-review/browser-regression.mjs"
