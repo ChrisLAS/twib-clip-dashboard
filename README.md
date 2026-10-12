@@ -102,3 +102,7 @@ activation, UI, migration application or deployment is included.
 
 Use the [commit-pinned GitHub handoff](docs/number-one-github-workflow.md) for the
 next disabled Nomad prototype change; an archive transfer is unnecessary.
+
+For receiver-only updates to an existing embedded-frontend deployment, use the
+[byte-preserving packaging procedure](docs/embedded-worker-packaging.md). Native
+`keep_assets` alone does not preserve frontend bytes embedded in an old module.
