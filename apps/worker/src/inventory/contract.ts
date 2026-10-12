@@ -122,15 +122,31 @@ function decoded(value: string): string {
 }
 function safeRef(value: string | null): void {
   if (value === null) return;
-  const text = decoded(value);
-  if (
-    value.length > 1024 ||
-    /[\u0000-\u001f\u007f\\?#:%]/.test(text) ||
-    text.startsWith("/") ||
-    text.split("/").some((part) => !part || part === "." || part === "..") ||
-    secret.test(text)
-  )
-    throw invalid("INVENTORY_UNSAFE_REFERENCE");
+  if (value.length > 1024) throw invalid("INVENTORY_UNSAFE_REFERENCE");
+  // Refs are literal filesystem names, not transport-encoded paths. Decoding is
+  // inspection only: never return/rewrite the producer's identity or reference.
+  const separators = value.split("/").length;
+  let view = value;
+  for (let pass = 0; pass <= 6; pass++) {
+    if (
+      /[\p{Cc}\p{Cf}\p{Cs}]/u.test(view) ||
+      /[\\?#:]/.test(view) ||
+      view.startsWith("/") ||
+      view.split("/").length !== separators ||
+      view.split("/").some((part) => !part || part === "." || part === "..") ||
+      secret.test(view)
+    )
+      throw invalid("INVENTORY_UNSAFE_REFERENCE");
+    if (!/%[a-f0-9]{2}/i.test(view)) return;
+    if (pass === 6) throw invalid("INVENTORY_UNSAFE_REFERENCE");
+    try {
+      // Protect malformed/bare percent signs as literal data, while still
+      // checking valid escapes in mixed strings such as token%3Dx%zz.mp4.
+      view = decodeURIComponent(view.replace(/%(?![a-f0-9]{2})/gi, "%25"));
+    } catch {
+      throw invalid("INVENTORY_UNSAFE_REFERENCE");
+    }
+  }
 }
 function publicUrl(value: string, grant: InventoryGrant): void {
   let url: URL;

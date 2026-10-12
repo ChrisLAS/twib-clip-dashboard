@@ -1,0 +1,124 @@
+[
+  {
+    "case": "percent_filename",
+    "local_prepared_sequence": 1,
+    "complete": true,
+    "items": 1,
+    "warnings": 4,
+    "coverage": 6,
+    "receiver": {
+      "status": 422,
+      "code": "INVENTORY_UNSAFE_REFERENCE"
+    }
+  },
+  {
+    "case": "encoded_secret_filename",
+    "local_prepared_sequence": 1,
+    "complete": true,
+    "items": 1,
+    "warnings": 4,
+    "coverage": 6,
+    "receiver": {
+      "status": 422,
+      "code": "INVENTORY_UNSAFE_REFERENCE"
+    }
+  },
+  {
+    "case": "reserved_origin",
+    "local_prepared_sequence": 1,
+    "complete": true,
+    "items": 1,
+    "warnings": 4,
+    "coverage": 6,
+    "receiver": {
+      "status": 422,
+      "code": "INVENTORY_UNSAFE_URL"
+    }
+  },
+  {
+    "case": "malformed_percent_origin",
+    "local_prepared_sequence": 1,
+    "complete": true,
+    "items": 1,
+    "warnings": 4,
+    "coverage": 6,
+    "receiver": {
+      "status": 422,
+      "code": "INVENTORY_ENVELOPE_INVALID"
+    }
+  },
+  {
+    "case": "warning_limit",
+    "local_prepared_sequence": 1,
+    "complete": false,
+    "items": 0,
+    "warnings": 2005,
+    "coverage": 6,
+    "receiver": {
+      "status": 422,
+      "code": "INVENTORY_LIMIT"
+    }
+  },
+  {
+    "case": "prepare_candidate_status",
+    "local_prepared_sequence": 1,
+    "complete": true,
+    "items": 1,
+    "warnings": 5,
+    "coverage": 7,
+    "receiver": {
+      "status": 422,
+      "code": "INVENTORY_INVALID"
+    }
+  },
+  {
+    "case": "prepare_media_evidence",
+    "local_prepared_sequence": 1,
+    "complete": true,
+    "items": 1,
+    "warnings": 5,
+    "coverage": 7,
+    "receiver": {
+      "status": 422,
+      "code": "INVENTORY_INVALID"
+    }
+  },
+  {
+    "case": "prepare_warning_text",
+    "local_prepared_sequence": 1,
+    "complete": true,
+    "items": 1,
+    "warnings": 1,
+    "coverage": 7,
+    "receiver": {
+      "status": 422,
+      "code": "INVENTORY_PRIVACY_REJECTED"
+    }
+  },
+  {
+    "case": "prepare_coverage_limit",
+    "local_prepared_sequence": 1,
+    "complete": true,
+    "items": 1,
+    "warnings": 5,
+    "coverage": 2001,
+    "receiver": {
+      "status": 422,
+      "code": "INVENTORY_LIMIT"
+    }
+  },
+  {
+    "case": "double_slash_state_overlap",
+    "lexical_overlap": false,
+    "resolved_overlap": true,
+    "database_written_inside_synthetic_source": true
+  },
+  {
+    "case": "receipt_reuse_control",
+    "acknowledged": [
+      false,
+      true
+    ],
+    "wrong_entry_receipt_rejected": "ContractError"
+  }
+]

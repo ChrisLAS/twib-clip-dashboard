@@ -1,0 +1,95 @@
+{
+  "policy": "literal-ref-six-pass-inspection/v1",
+  "allowed": [
+    {
+      "ref": "clip%.mp4",
+      "stored_ref": "clip%.mp4"
+    },
+    {
+      "ref": "clip%25.mp4",
+      "stored_ref": "clip%25.mp4"
+    },
+    {
+      "ref": "clip%zz.mp4",
+      "stored_ref": "clip%zz.mp4"
+    },
+    {
+      "ref": "clip%41.mp4",
+      "stored_ref": "clip%41.mp4"
+    },
+    {
+      "ref": "clip%2525.mp4",
+      "stored_ref": "clip%2525.mp4"
+    },
+    {
+      "ref": "new-review/clip%25.mp4",
+      "stored_ref": "new-review/clip%25.mp4"
+    },
+    {
+      "ref": "caf%C3%A9.mp4",
+      "stored_ref": "caf%C3%A9.mp4"
+    }
+  ],
+  "rejected": [
+    {
+      "ref": "token%3DSYNTHETIC.mp4"
+    },
+    {
+      "ref": "token%253DSYNTHETIC.mp4"
+    },
+    {
+      "ref": "token%3DSYNTHETIC%zz.mp4"
+    },
+    {
+      "ref": "a%2fb.mp4"
+    },
+    {
+      "ref": "a%5cb.mp4"
+    },
+    {
+      "ref": "%2e%2e/x"
+    },
+    {
+      "ref": "%252e%252e/x"
+    },
+    {
+      "ref": "file%3Afoo"
+    },
+    {
+      "ref": "C%3Afoo"
+    },
+    {
+      "ref": "%00x"
+    },
+    {
+      "ref": "clip%FF.mp4"
+    },
+    {
+      "ref": "x%09y"
+    },
+    {
+      "ref": "x%7fy"
+    },
+    {
+      "ref": "x%C2%80y"
+    },
+    {
+      "ref": "x%E2%80%AEy"
+    },
+    {
+      "ref": "a//b"
+    },
+    {
+      "ref": "/absolute"
+    },
+    {
+      "ref": "../relative"
+    },
+    {
+      "ref": "token=SYNTHETIC.mp4"
+    },
+    {
+      "ref": "clip%25252525252541.mp4"
+    }
+  ]
+}

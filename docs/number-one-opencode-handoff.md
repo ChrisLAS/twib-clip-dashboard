@@ -1,5 +1,9 @@
 # Next Nomad change: durable, disabled inventory envelopes
 
+The supplied v2 prototype has now been reviewed. Continue with the focused
+[parity-fix task](number-one-parity/FIX-PROMPT.md); the original task below remains
+the transport/durability specification.
+
 Continue the separate TWiB inventory-bridge prototype in the Nomad repository.
 Read repository/runbook instructions and the existing bridge handoff first.
 Fetch the exact receiver commit using `docs/number-one-github-workflow.md`; read

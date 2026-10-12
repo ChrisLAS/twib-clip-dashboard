@@ -58,6 +58,16 @@ an explicitly reviewed exact-host allowlist. Nonempty editorial context requires
 an explicit privacy policy. Nothing resolves DNS, fetches URLs, reads media, runs
 commands, retries downloads or controls producer jobs.
 
+Relative refs are **literal filesystem names**. Preserve their original text and
+IDs; decoding is inspection only. Raw text and up to six decoded views must all
+avoid traversal, absolute/URI/drive forms, controls (Unicode Cc/Cf/Cs), recognizable
+secrets and newly introduced separators. Reject valid escapes remaining beyond
+that budget and invalid UTF-8 escapes. Bare/malformed percent signs in refs remain
+literal, while valid triplets in mixed strings are still inspected. Benign `%`,
+`%25`, `%zz` and `%41` filenames are therefore accepted unchanged. Origin URLs
+remain a separate strict URI policy. Shared cases live in
+`docs/number-one-parity/reference-policy-vectors.json`.
+
 These checks cannot identify arbitrary unlabeled secrets in prose or URL paths.
 An approved host is not proof that every path is public. A manual privacy review
 of representative output and the concrete scope policy remains required before

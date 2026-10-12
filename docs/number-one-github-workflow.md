@@ -22,12 +22,13 @@ test "$(git -C twib-inventory-review rev-parse HEAD)" = "$REVIEW_SHA"
 
 Read these files at that exact revision, in order:
 
-1. `docs/number-one-opencode-handoff.md`: the bounded Nomad implementation task
-2. `docs/number-one-inventory.md`: receiver behavior, limits and activation gates
-3. `apps/worker/src/inventory/envelope.schema.json`: v2 wire envelope
-4. `apps/worker/src/inventory/manifest.schema.json`: unchanged v1 inner manifest
-5. `apps/worker/test/fixtures/inventory.envelope.example.json`: synthetic envelope
-6. `apps/worker/test/inventory.test.ts`: executable protocol edge cases
+1. `docs/number-one-parity/FIX-PROMPT.md`: current bounded Nomad parity-fix task
+2. `docs/number-one-opencode-handoff.md`: original transport/durability specification
+3. `docs/number-one-inventory.md`: receiver behavior, limits and activation gates
+4. `apps/worker/src/inventory/envelope.schema.json`: v2 wire envelope
+5. `apps/worker/src/inventory/manifest.schema.json`: unchanged v1 inner manifest
+6. `apps/worker/test/fixtures/inventory.envelope.example.json`: synthetic envelope
+7. `apps/worker/test/inventory.test.ts`: executable protocol edge cases
 
 The envelope schema references `urn:number-one:twib-inventory:v1`; register the
 inner schema with that URN in a Draft 2020-12 validator. Local receiver development
