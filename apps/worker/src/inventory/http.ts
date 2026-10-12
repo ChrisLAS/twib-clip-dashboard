@@ -1,6 +1,10 @@
 import type { Env } from "../env";
 import { HttpError, json } from "../errors";
-import { authenticateInventory, INVENTORY_INGEST_PATH } from "./auth";
+import {
+  authenticateInventory,
+  InventoryAuthError,
+  INVENTORY_INGEST_PATH,
+} from "./auth";
 import { readInventoryBody } from "./contract";
 import { acceptInventory } from "./store";
 
@@ -15,7 +19,23 @@ export async function ingestInventory(
       "Inventory ingestion is not activated.",
     );
   // Verify configuration, identity and fixed grant before consuming any body.
-  const grant = await authenticateInventory(request, env);
+  const grant = await authenticateInventory(request, env).catch(
+    (error: unknown) => {
+      if (error instanceof InventoryAuthError) return error;
+      throw error;
+    },
+  );
+  if (grant instanceof InventoryAuthError)
+    return json(
+      {
+        error: {
+          code: grant.code,
+          message: grant.message,
+          category: grant.category,
+        },
+      },
+      401,
+    );
   const input = await readInventoryBody(request);
   // Validation (including exact source/episode and empty origins/context) precedes
   // every DB read/write. Durable commit/readback precedes the only success reply.

@@ -5,10 +5,19 @@ import { DatabaseSync } from "node:sqlite";
 import worker from "../src/index";
 import type { Env } from "../src/env";
 import type { InventoryEnvelope } from "../src/inventory/contract";
-const state = vi.hoisted(() => ({ key: undefined as CryptoKey | undefined }));
+const state = vi.hoisted(() => ({
+  key: undefined as CryptoKey | undefined,
+  failure: undefined as Error | undefined,
+}));
 vi.mock("jose", async () => {
   const actual = await vi.importActual<typeof import("jose")>("jose");
-  return { ...actual, createRemoteJWKSet: vi.fn(() => state.key) };
+  return {
+    ...actual,
+    createRemoteJWKSet: vi.fn(() => async () => {
+      if (state.failure) throw state.failure;
+      return state.key;
+    }),
+  };
 });
 const now = Date.parse("2026-10-13T12:00:00Z");
 const seconds = now / 1000;
@@ -44,6 +53,7 @@ class Statement {
   }
 }
 beforeEach(() => {
+  state.failure = undefined;
   vi.spyOn(Date, "now").mockReturnValue(now);
   sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys=ON");
@@ -262,4 +272,82 @@ describe("disabled-by-default inventory machine authentication", () => {
       401,
     );
   });
+});
+
+describe("bounded inventory authentication diagnostics", () => {
+  async function diagnostic(
+    jwt: string | undefined,
+    category: string,
+    url = endpoint,
+  ) {
+    const req = request(jwt, url);
+    const response = await worker.fetch(req, env);
+    expect(response.status).toBe(401);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    const text = await response.text();
+    expect(text.length).toBeLessThan(256);
+    expect(JSON.parse(text)).toEqual({
+      error: {
+        code: "INVENTORY_AUTH_REQUIRED",
+        message: "A valid inventory machine identity is required.",
+        category,
+      },
+    });
+    if (jwt) expect(text).not.toContain(jwt);
+    expect(text).not.toContain("SYNTHETIC_PRIVATE_CANARY");
+    expect(text).not.toContain("synthetic-client.access");
+    expect(text).not.toContain("payload");
+    expect(req.bodyUsed).toBe(false);
+    expect(db.prepare).not.toHaveBeenCalled();
+    expect(db.batch).not.toHaveBeenCalled();
+  }
+  it("missing assertion", async () =>
+    diagnostic(undefined, "assertion_missing"));
+  it("malformed assertion", async () =>
+    diagnostic("SYNTHETIC_PRIVATE_CANARY", "assertion_shape"));
+  it("oversized assertion", async () =>
+    diagnostic("x".repeat(16385), "assertion_shape"));
+  it("wrong destination", async () =>
+    diagnostic(
+      await token(),
+      "request_scope",
+      endpoint + "?SYNTHETIC_PRIVATE_CANARY=1",
+    ));
+  it("signature failure", async () =>
+    diagnostic(
+      await token({ canary: "SYNTHETIC_PRIVATE_CANARY" }, otherKey),
+      "signature",
+    ));
+  it("key-fetch exceptions cannot leak message or payload", async () => {
+    state.failure = Object.assign(new Error("SYNTHETIC_PRIVATE_CANARY"), {
+      payload: { secret: "SYNTHETIC_PRIVATE_CANARY" },
+    });
+    await diagnostic(await token(), "jwks_unavailable");
+  });
+  it.each([
+    [{ iss: "https://SYNTHETIC_PRIVATE_CANARY.example" }, "issuer"],
+    [{ aud: ["SYNTHETIC_PRIVATE_CANARY"] }, "audience"],
+    [{ aud: ["a".repeat(64), "SYNTHETIC_PRIVATE_CANARY"] }, "audience"],
+    [{ aud: "a".repeat(64) }, "audience"],
+    [{ exp: seconds }, "expiry"],
+    [{ nbf: seconds + 61 }, "expiry"],
+    [{ type: "org" }, "service_identity"],
+    [{ common_name: "SYNTHETIC_PRIVATE_CANARY" }, "service_identity"],
+    [{ sub: "SYNTHETIC_PRIVATE_CANARY" }, "service_identity"],
+    [{ email: "SYNTHETIC_PRIVATE_CANARY" }, "service_identity"],
+    [{ iat: seconds + 61 }, "issued_at"],
+    [{ iat: seconds - 901 }, "issued_at"],
+    [{ exp: seconds + 3601 }, "token_lifetime"],
+    [{ iat: seconds + 60, exp: seconds + 30 }, "token_lifetime"],
+    [{ iat: seconds + 0.5 }, "assertion_shape"],
+    [{ common_name: undefined }, "assertion_shape"],
+  ] as [JWTPayload, string][])(
+    "fixed category for signed claim rejection %j",
+    async (claims, category) => {
+      await diagnostic(
+        await token({ ...claims, canary: "SYNTHETIC_PRIVATE_CANARY" }),
+        category,
+      );
+    },
+  );
 });

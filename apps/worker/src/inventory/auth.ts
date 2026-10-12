@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, errors, jwtVerify } from "jose";
 import type { Env } from "../env";
 import { HttpError } from "../errors";
 import { inventoryEpisodeId, type InventoryGrant } from "./contract";
@@ -11,12 +11,32 @@ const disabled = () =>
     "INVENTORY_INGESTION_DISABLED",
     "Inventory ingestion is not activated.",
   );
-const denied = () =>
-  new HttpError(
-    401,
-    "INVENTORY_AUTH_REQUIRED",
-    "A valid inventory machine identity is required.",
-  );
+export const INVENTORY_AUTH_CATEGORIES = [
+  "assertion_missing",
+  "assertion_shape",
+  "request_scope",
+  "jwks_unavailable",
+  "signature",
+  "issuer",
+  "audience",
+  "expiry",
+  "service_identity",
+  "issued_at",
+  "token_lifetime",
+] as const;
+export class InventoryAuthError extends HttpError {
+  constructor(
+    public readonly category: (typeof INVENTORY_AUTH_CATEGORIES)[number],
+  ) {
+    super(
+      401,
+      "INVENTORY_AUTH_REQUIRED",
+      "A valid inventory machine identity is required.",
+    );
+  }
+}
+const denied = (category: (typeof INVENTORY_AUTH_CATEGORIES)[number]) =>
+  new InventoryAuthError(category);
 const scopeDenied = () =>
   new HttpError(
     403,
@@ -73,10 +93,11 @@ export async function authenticateInventory(
     url.hash ||
     request.method !== "POST"
   )
-    throw denied();
+    throw denied("request_scope");
   if (now < starts || now >= expires) throw scopeDenied();
   const token = request.headers.get("Cf-Access-Jwt-Assertion");
-  if (!token || token.length > 16384) throw denied();
+  if (!token) throw denied("assertion_missing");
+  if (token.length > 16384) throw denied("assertion_shape");
   const issuer = `https://${team}`;
   try {
     let jwks = keys.get(issuer);
@@ -86,40 +107,71 @@ export async function authenticateInventory(
       });
       keys.set(issuer, jwks);
     }
-    const { payload } = await jwtVerify(token, jwks, {
-      issuer,
-      audience,
-      algorithms: ["RS256"],
-      currentDate: new Date(now),
-      requiredClaims: [
-        "iss",
-        "aud",
-        "exp",
-        "iat",
-        "type",
-        "common_name",
-        "sub",
-      ],
-    });
+    const resolveKey: ReturnType<typeof createRemoteJWKSet> = jwks;
+    const { payload } = await jwtVerify(
+      token,
+      async (header, flattened) => {
+        try {
+          return await resolveKey(header, flattened);
+        } catch {
+          // Never expose a fetch error, response, key, header or token payload.
+          throw denied("jwks_unavailable");
+        }
+      },
+      {
+        issuer,
+        audience,
+        algorithms: ["RS256"],
+        currentDate: new Date(now),
+        requiredClaims: [
+          "iss",
+          "aud",
+          "exp",
+          "iat",
+          "type",
+          "common_name",
+          "sub",
+        ],
+      },
+    );
     const seconds = Math.floor(now / 1000);
     if (
       payload.type !== "app" ||
       payload.common_name !== client ||
       payload.sub !== "" ||
-      payload.email !== undefined ||
+      payload.email !== undefined
+    )
+      throw denied("service_identity");
+    if (
       !Number.isSafeInteger(payload.iat) ||
-      !Number.isSafeInteger(payload.exp) ||
-      payload.iat! > seconds + 60 ||
-      seconds - payload.iat! > 900 ||
-      payload.exp! <= payload.iat! ||
-      payload.exp! - payload.iat! > 3600 ||
+      !Number.isSafeInteger(payload.exp)
+    )
+      throw denied("assertion_shape");
+    if (payload.iat! > seconds + 60 || seconds - payload.iat! > 900)
+      throw denied("issued_at");
+    if (payload.exp! <= payload.iat! || payload.exp! - payload.iat! > 3600)
+      throw denied("token_lifetime");
+    if (
       !Array.isArray(payload.aud) ||
       payload.aud.length !== 1 ||
       payload.aud[0] !== audience
     )
-      throw denied();
-  } catch {
-    throw denied();
+      throw denied("audience");
+  } catch (error) {
+    if (error instanceof InventoryAuthError) throw error;
+    if (error instanceof errors.JWTExpired) throw denied("expiry");
+    if (error instanceof errors.JWTClaimValidationFailed) {
+      // Only compare the library's fixed claim name. Its payload/message may
+      // contain sensitive values and must never be returned or logged.
+      if (error.claim === "iss") throw denied("issuer");
+      if (error.claim === "aud") throw denied("audience");
+      if (error.claim === "exp" || error.claim === "nbf")
+        throw denied("expiry");
+      throw denied("assertion_shape");
+    }
+    if (error instanceof errors.JWSSignatureVerificationFailed)
+      throw denied("signature");
+    throw denied("assertion_shape");
   }
   return {
     sourceId: "nomad:number-one",
