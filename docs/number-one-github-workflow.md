@@ -22,7 +22,8 @@ test "$(git -C twib-inventory-review rev-parse HEAD)" = "$REVIEW_SHA"
 
 Read these files at that exact revision, in order:
 
-1. `docs/number-one-parity/FIX-PROMPT.md`: current bounded Nomad parity-fix task
+1. `docs/number-one-parity/FIX-PROMPT.md`: current bounded Nomad secret-detector task
+   with `secret-policy.md` and `secret-policy-vectors.json` in the same directory
 2. `docs/number-one-opencode-handoff.md`: original transport/durability specification
 3. `docs/number-one-inventory.md`: receiver behavior, limits and activation gates
 4. `apps/worker/src/inventory/envelope.schema.json`: v2 wire envelope

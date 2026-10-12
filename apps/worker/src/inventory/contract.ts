@@ -1,3 +1,4 @@
+import { containsRecognizableSecret } from "./secrets";
 /* eslint-disable no-control-regex -- Explicitly reject control bytes in untrusted metadata. */
 import {
   validateManifest as validateSchema,
@@ -110,8 +111,6 @@ export async function semanticHash(
   delete payload.idempotency_digest;
   return sha256(canonical(payload));
 }
-const secret =
-  /\b(?:bearer\s+\S+|basic\s+\S+|(?:access[_-]?token|refresh[_-]?token|client[_-]?secret|token|secret|password|authorization|api[_-]?key|signature)["']?\s*[:=]\s*["']?(?!\[redacted-secret\])\S+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|gh[pousr]_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{16,})/i;
 const controls = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 function decoded(value: string): string {
   try {
@@ -134,7 +133,7 @@ function safeRef(value: string | null): void {
       view.startsWith("/") ||
       view.split("/").length !== separators ||
       view.split("/").some((part) => !part || part === "." || part === "..") ||
-      secret.test(view)
+      containsRecognizableSecret(view)
     )
       throw invalid("INVENTORY_UNSAFE_REFERENCE");
     if (!/%[a-f0-9]{2}/i.test(view)) return;
@@ -176,7 +175,7 @@ function publicUrl(value: string, grant: InventoryGrant): void {
     host.includes(":") ||
     /(?:^|\.)(?:localhost|local|internal|lan|home|test|invalid)$/.test(host) ||
     !grant.originHosts.includes(host) ||
-    secret.test(path) ||
+    containsRecognizableSecret(path) ||
     /[\u0000-\u001f\u007f]/.test(path)
   )
     throw invalid("INVENTORY_UNSAFE_URL");
@@ -184,7 +183,11 @@ function publicUrl(value: string, grant: InventoryGrant): void {
 function prose(value: string, grant: InventoryGrant): void {
   if (!grant.allowEditorialContext)
     throw invalid("INVENTORY_PRIVACY_REVIEW_REQUIRED");
-  if (value.length > 4000 || controls.test(value) || secret.test(value))
+  if (
+    value.length > 4000 ||
+    controls.test(value) ||
+    containsRecognizableSecret(value)
+  )
     throw invalid("INVENTORY_PRIVACY_REJECTED");
   const withoutUrls = value.replace(/https?:\/\/[^\s<>"']+/gi, (url) => {
     publicUrl(url, grant);

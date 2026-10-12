@@ -135,3 +135,13 @@ and one actual workerd/D1 runtime test. The nine historical fixtures remain
 byte-identical; one benign-reference outcome intentionally changes to acceptance,
 and the other eight remain rejected. No producer source was edited or re-executed
 for this correction. Hosted results for the new commit are recorded in PR #2.
+
+## Subsequent bounded detector review
+
+The original four groups passed under reviewed Nomad PR 13 revision `b60b633f779a61ddba38d05cfd32cb46a4c75e99`.
+The remaining shared secret-detector mismatch, six actual collector cases and
+current patch instructions are in `secret-policy.md`,
+`secret-policy-vectors.json` and `FIX-PROMPT.md`. The four-group prompt is retained
+as `FOUR-GAP-PROMPT.md` for historical context. Receiver full `npm run check`
+passes 641 tests across 30 files after this detector clarification, including all
+original parity cases; lint, types, web build and both Worker dry runs also pass.
