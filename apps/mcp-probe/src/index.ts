@@ -72,7 +72,9 @@ async function authorize(request: Request, env: OAuthEnv): Promise<Response> {
       const details = await oauth.describeConsent(auth);
       const consent = await oauth.beginConsent(auth);
       consent.headers.set("Content-Type", "text/html; charset=utf-8");
-      consent.headers.set("Referrer-Policy", "no-referrer");
+      // no-referrer makes native form POSTs send Origin: null, breaking the
+      // strict same-origin CSRF check below. Never send cross-site referrers.
+      consent.headers.set("Referrer-Policy", "same-origin");
       consent.headers.set(
         "Content-Security-Policy",
         "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
