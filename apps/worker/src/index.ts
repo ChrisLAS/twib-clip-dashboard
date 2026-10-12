@@ -1,3 +1,4 @@
+import { ingestInventory } from "./inventory/http";
 import { inventoryEpisodeParameter, listInventory } from "./inventory/store";
 import {
   renderTranscriptInputSchema,
@@ -130,14 +131,10 @@ export default {
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
-      // Reserved independently scoped machine endpoint. No browser/Drive/MCP
-      // credential, demo flag, or environment toggle can enable ingestion.
+      // Separate machine adapter; owner authentication and demo bypass never
+      // authorize inventory writes. Missing private configuration stays closed.
       if (/^\/api\/v[12]\/number-one\//.test(new URL(request.url).pathname))
-        throw new HttpError(
-          503,
-          "INVENTORY_INGESTION_DISABLED",
-          "Inventory ingestion is not activated.",
-        );
+        return await ingestInventory(request, env);
       const owner = await authenticate(request, env);
       const demo = isDemo(request, env);
       if (demo) await seedDemo(env.DB);

@@ -95,9 +95,10 @@ The aggregate test run requires Node24+, Python3, ffmpeg and ffprobe. It runs th
 
 The separate [metadata inventory receiver](docs/number-one-inventory.md) preserves
 producer observations and durable receipts without changing curated clips or
-playback readiness. Its producer HTTP namespace is hard-disabled; owner-only
-inventory reads are implemented as an API foundation. No machine authentication,
-sender, live connection, UI, migration application or deployment is included.
+playback readiness. Its [machine-auth adapter](docs/number-one-pilot.md) is disabled by default and
+requires separately approved private configuration. Owner-only inventory reads
+are implemented as an API foundation. No live connection, credential, sender
+activation, UI, migration application or deployment is included.
 
 Use the [commit-pinned GitHub handoff](docs/number-one-github-workflow.md) for the
 next disabled Nomad prototype change; an archive transfer is unnecessary.

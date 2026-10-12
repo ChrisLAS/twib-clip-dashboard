@@ -49,7 +49,7 @@ function replay(row: StoredReceipt, hash: string): InventoryReceipt {
     );
   return JSON.parse(row.receipt_json) as InventoryReceipt;
 }
-// Not reachable from HTTP until a separately approved machine-auth adapter exists.
+// HTTP access requires the disabled-by-default, dedicated machine-auth adapter.
 export async function acceptInventory(
   db: D1Database,
   input: unknown,

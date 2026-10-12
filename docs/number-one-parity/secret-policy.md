@@ -34,6 +34,10 @@ At the left boundary, recognize any of these alternatives after ASCII folding:
    another dot and one or more of that class.
 4. `gh` then one of `pousr`, underscore and one or more `[a-z0-9_]`.
 5. `sk-` and at least 16 `[a-z0-9_-]` characters.
+6. `cfast_` and at least 48 `[a-z0-9]` characters. Consume the entire run for
+   redaction, including an overlong suffix. This conservatively covers the current
+   Cloudflare service-secret format without relying on its checksum; 47 characters
+   alone do not match. All corpus examples are deliberately synthetic offline data.
 
 No labelled placeholder exemption exists: `token=[redacted-secret]` and
 `token="[redacted-secret]"` reject, as does `token="".mp4`. A standalone
@@ -70,4 +74,13 @@ receiver keeps all six rejections. This corpus closes the known detector mismatc
 it is not an invitation to expand fuzzing or redesign the bridge. Nomad's four red
 repository-wide CI checks are a separate unresolved result; the review did not
 prove they predated the patch. No live Nomad service or authenticated HTTP receipt
-has been verified, and the receiver routes remain hard-disabled.
+has been verified. This describes the historical review; the new pilot adapter
+is disabled by default, with no tracked activation configuration.
+
+## Pilot credential-format extension
+
+The corpus now also pins `cfast_` cases across detection, full-run redaction, raw
+and encoded references, prose and origin paths. This must land in the producer
+before provisioning the single live service credential. Existing hexadecimal
+service secrets may lack this recognizable prefix; labelled-secret checks remain
+important. See [Cloudflare client-secret format](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/#client-secret-format).

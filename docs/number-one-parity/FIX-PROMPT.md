@@ -1,4 +1,8 @@
-# OpenCode: align the shared secret detector
+# Archived task: align the shared secret detector
+
+The original mismatch is closed in the reviewed producer. Current work is the
+[disabled manual sender task](../number-one-pilot-opencode.md), including the
+subsequent `cfast_` corpus extension. The text below is historical.
 
 Continue the existing disabled Number One inventory bridge from reviewed Nomad
 PR 13 revision `b60b633f779a61ddba38d05cfd32cb46a4c75e99`. Read repository instructions; preserve unrelated work.

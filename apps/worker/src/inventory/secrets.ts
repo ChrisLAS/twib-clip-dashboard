@@ -9,7 +9,7 @@ const recognizableSecret = new RegExp(
     `(?:bearer|basic)${ws}+${value}|` +
     `(?:access[_-]?token|refresh[_-]?token|client[_-]?secret|token|secret|password|authorization|api[_-]?key|signature)["']?${ws}*[:=]${ws}*(?:["']?(?:bearer|basic)${ws}+${value}|${value})|` +
     `eyj[a-z0-9_-]+\\.[a-z0-9_-]+\\.[a-z0-9_-]+|` +
-    `gh[pousr]_[a-z0-9_]+|sk-[a-z0-9_-]{16,})`,
+    `gh[pousr]_[a-z0-9_]+|sk-[a-z0-9_-]{16,}|cfast_[a-z0-9]{48,})`,
   "g",
 );
 function folded(value: string): string {

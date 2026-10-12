@@ -1,3 +1,6 @@
+> Historical transport foundation. For current work, use the
+> [disabled manual sender task](number-one-pilot-opencode.md).
+
 # Next Nomad change: durable, disabled inventory envelopes
 
 The supplied v2 prototype has now been reviewed. Continue with the focused

@@ -57,7 +57,7 @@ export interface InventoryManifest {
   scan_finished_at: string;
 }
 // Internal contract, NOT an authentication mechanism or client-supplied claims.
-// A future reviewed machine-auth adapter must construct this server-side.
+// The dedicated machine-auth adapter constructs this server-side.
 export interface InventoryGrant {
   sourceId: string;
   episodeId: string;

@@ -8,18 +8,17 @@ services, schedules, media paths, or production database changes are included.
 
 ## HTTP and authorization boundary
 
-- Reserved producer namespaces: `/api/v1/number-one/*` and `/api/v2/number-one/*`. Every method always returns
-  `503 INVENTORY_INGESTION_DISABLED`, before owner authentication and without a
-  database write. There is deliberately **no environment variable to enable it**.
-- `acceptInventory` is a locally tested internal operation. It requires an
-  explicit server-side `InventoryGrant` binding source, exact episode ID/number,
-  `inventory:write`, expiry, editorial privacy approval and exact public origin
-  hosts. This object is an interface for a future verifier, not authentication.
-  Never construct it from unverified request JSON/headers.
-- A future, separately reviewed machine-auth adapter must verify fresh scoped
-  authentication before parsing the bounded JSON body or calling the operation.
-  Existing owner Access, Drive OAuth, browser CSRF, and temporary MCP OAuth must
-  never construct a producer grant. Browser/demo access does not enable writes.
+- The exact POST `/api/v2/number-one/inventory-snapshots` has a separately scoped,
+  disabled-by-default machine adapter. Missing private configuration returns 503;
+  all v1/sibling reserved paths stay disabled. No activation values are tracked.
+  See [the pilot contract](number-one-pilot.md) for exact config, JWT and grant checks.
+- `acceptInventory` requires an explicit server-side `InventoryGrant` binding
+  source, exact episode ID/number, inventory:write, expiry and privacy policy.
+  Never construct it from unverified request JSON/headers. The pilot adapter fixes
+  source/episode127 and rejects all origins/context before persistence.
+- Owner Access, Drive OAuth, browser CSRF, demo and temporary MCP OAuth cannot
+  construct a producer grant. Dedicated machine verification occurs before reading
+  the bounded body. Owner routing/authentication remains unchanged.
 - Owner-only `GET /api/inventory?episodeId=episode_<64 hex>&after=item_<64 hex>`
   exposes a read foundation, 20 identities per page. `after` is optional.
   Episode IDs belong to the inventory contract, not curated dashboard episode
@@ -173,7 +172,8 @@ Before any live integration:
 1. Agree source/episode registration, explicit inventory-to-workspace mapping,
    v2 durable-writer protocol, privacy policy, host allowlist, limits and retention.
 2. Select and approve fresh machine authentication, resource scope, secure
-   provisioning/storage and revocation. Implement and test the verifier.
+   provisioning/storage and revocation. The local verifier is implemented/tested;
+   no live policy or credential is configured.
 3. Review production Access routing independently; owner access must remain intact.
 4. Approve/apply migration and deployment, then test an approved synthetic snapshot
    end to end and unauthorized/wrong-source/episode/replay cases.
