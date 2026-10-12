@@ -18,7 +18,8 @@ export const INVENTORY_AUTH_CATEGORIES = [
   "jwks_unavailable",
   "signature",
   "issuer",
-  "audience",
+  "audience_value",
+  "audience_shape",
   "expiry",
   "service_identity",
   "issued_at",
@@ -37,6 +38,18 @@ export class InventoryAuthError extends HttpError {
 }
 const denied = (category: (typeof INVENTORY_AUTH_CATEGORIES)[number]) =>
   new InventoryAuthError(category);
+// RFC 7519 permits a single audience as either a string or singleton array.
+// Never accept multiple audience identities, even when one matches.
+function singleAudience(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (
+    Array.isArray(value) &&
+    value.length === 1 &&
+    typeof value[0] === "string"
+  )
+    return value[0];
+  return undefined;
+}
 const scopeDenied = () =>
   new HttpError(
     403,
@@ -151,12 +164,9 @@ export async function authenticateInventory(
       throw denied("issued_at");
     if (payload.exp! <= payload.iat! || payload.exp! - payload.iat! > 3600)
       throw denied("token_lifetime");
-    if (
-      !Array.isArray(payload.aud) ||
-      payload.aud.length !== 1 ||
-      payload.aud[0] !== audience
-    )
-      throw denied("audience");
+    const tokenAudience = singleAudience(payload.aud);
+    if (tokenAudience === undefined) throw denied("audience_shape");
+    if (tokenAudience !== audience) throw denied("audience_value");
   } catch (error) {
     if (error instanceof InventoryAuthError) throw error;
     if (error instanceof errors.JWTExpired) throw denied("expiry");
@@ -164,7 +174,12 @@ export async function authenticateInventory(
       // Only compare the library's fixed claim name. Its payload/message may
       // contain sensitive values and must never be returned or logged.
       if (error.claim === "iss") throw denied("issuer");
-      if (error.claim === "aud") throw denied("audience");
+      if (error.claim === "aud")
+        throw denied(
+          singleAudience(error.payload.aud) === undefined
+            ? "audience_shape"
+            : "audience_value",
+        );
       if (error.claim === "exp" || error.claim === "nbf")
         throw denied("expiry");
       throw denied("assertion_shape");

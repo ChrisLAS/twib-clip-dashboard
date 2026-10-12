@@ -326,9 +326,9 @@ describe("bounded inventory authentication diagnostics", () => {
   });
   it.each([
     [{ iss: "https://SYNTHETIC_PRIVATE_CANARY.example" }, "issuer"],
-    [{ aud: ["SYNTHETIC_PRIVATE_CANARY"] }, "audience"],
-    [{ aud: ["a".repeat(64), "SYNTHETIC_PRIVATE_CANARY"] }, "audience"],
-    [{ aud: "a".repeat(64) }, "audience"],
+    [{ aud: ["SYNTHETIC_PRIVATE_CANARY"] }, "audience_value"],
+    [{ aud: ["a".repeat(64), "SYNTHETIC_PRIVATE_CANARY"] }, "audience_shape"],
+    [{ aud: "SYNTHETIC_PRIVATE_CANARY" }, "audience_value"],
     [{ exp: seconds }, "expiry"],
     [{ nbf: seconds + 61 }, "expiry"],
     [{ type: "org" }, "service_identity"],
@@ -348,6 +348,45 @@ describe("bounded inventory authentication diagnostics", () => {
         await token({ ...claims, canary: "SYNTHETIC_PRIVATE_CANARY" }),
         category,
       );
+    },
+  );
+});
+
+describe("exact single-audience representations", () => {
+  it.each(["a".repeat(64), ["a".repeat(64)]])(
+    "accepts only the configured single audience %j",
+    async (aud) => {
+      const response = await worker.fetch(request(await token({ aud })), env);
+      expect(response.status).toBe(200);
+      expect(db.batch).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each([
+    ["b".repeat(64), "audience_value"],
+    [["b".repeat(64)], "audience_value"],
+    ["synthetic-mcp-audience", "audience_value"],
+    [["a".repeat(64), "b".repeat(64)], "audience_shape"],
+    [["a".repeat(64), "a".repeat(64)], "audience_shape"],
+    [[], "audience_shape"],
+    [undefined, "audience_shape"],
+    [null, "audience_shape"],
+    [42, "audience_shape"],
+    [[42], "audience_shape"],
+    [["a".repeat(64), 42], "audience_shape"],
+    [{ value: "a".repeat(64) }, "audience_shape"],
+  ] as [unknown, string][])(
+    "rejects wrong or ambiguous audience %j without DB access",
+    async (aud, category) => {
+      const req = request(await token({ aud } as JWTPayload));
+      const response = await worker.fetch(req, env);
+      expect(response.status).toBe(401);
+      expect(
+        ((await response.json()) as { error: { category: string } }).error
+          .category,
+      ).toBe(category);
+      expect(req.bodyUsed).toBe(false);
+      expect(db.prepare).not.toHaveBeenCalled();
+      expect(db.batch).not.toHaveBeenCalled();
     },
   );
 });

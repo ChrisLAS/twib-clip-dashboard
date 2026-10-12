@@ -17,7 +17,8 @@ unchanged. An optional `error.category` is one of:
 - `jwks_unavailable`
 - `signature`
 - `issuer`
-- `audience`
+- `audience_value`
+- `audience_shape`
 - `expiry`
 - `service_identity`
 - `issued_at`
@@ -45,7 +46,7 @@ Update only the Number One bridge sender and its offline tests:
    - `ray_id`: accept only an ASCII full match
      `[0-9a-fA-F]{16,32}(?:-[A-Z]{3})?`, maximum 36 characters; otherwise omit.
    - `receiver_code`: only the exact string `INVENTORY_AUTH_REQUIRED`.
-   - `auth_category`: only an exact member of the 11-category list above, and
+   - `auth_category`: only an exact member of the 12-category list above, and
      only when `receiver_code` matches.
 3. Read an error body only for HTTP 401 with a single valid JSON content-type
    header and absent/identity content encoding. Apply the same existing 16 KiB
@@ -77,3 +78,26 @@ existing review branch and report the exact commit and results. Do not submit an
 envelope as part of this task. Once receiver diagnostics are separately deployed
 and one exact retry is separately approved, its sanitized output can distinguish
 an Access error page from a receiver rejection category.
+
+## Exact-audience compatibility update
+
+The receiver accepts the **same one configured audience identity** represented
+as either an exact case-sensitive string or an exact one-element string array,
+as permitted by [RFC 7519 section 4.1.3](https://www.rfc-editor.org/rfc/rfc7519.html#section-4.1.3).
+JOSE still verifies that configured audience, RS256 signature and fixed issuer.
+The additional check rejects multiple entries (even duplicate expected entries),
+empty arrays, missing audiences, nonstrings and all different identities.
+
+`audience_value` means a well-shaped single audience did not match.
+`audience_shape` means missing/invalid/empty/multiple audience representation.
+Neither returns audience values. The earlier `audience` diagnostic combined
+these outcomes and cannot establish which caused a past live rejection. The
+scalar compatibility defect is reproduced offline; it is not proof of the
+actual live token's representation.
+
+For a sender already implementing this document's previous revision, the only
+new sender work is adding `audience_value` and `audience_shape` to its fixed
+category allowlist and offline tests. It may retain legacy `audience` recognition
+for older receivers. Do not relax parsing, reveal claims, reset the queue, or send
+anything as part of this code update. Any retry remains separately approved and
+must reuse the exact persisted envelope; no new scan is needed.
