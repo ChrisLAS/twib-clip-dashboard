@@ -1,3 +1,4 @@
+import { inventoryEpisodeParameter, listInventory } from "./inventory/store";
 import {
   renderTranscriptInputSchema,
   importRenderTranscriptAsset,
@@ -129,6 +130,14 @@ export default {
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
+      // Reserved independently scoped machine endpoint. No browser/Drive/MCP
+      // credential, demo flag, or environment toggle can enable ingestion.
+      if (/^\/api\/v[12]\/number-one\//.test(new URL(request.url).pathname))
+        throw new HttpError(
+          503,
+          "INVENTORY_INGESTION_DISABLED",
+          "Inventory ingestion is not activated.",
+        );
       const owner = await authenticate(request, env);
       const demo = isDemo(request, env);
       if (demo) await seedDemo(env.DB);
@@ -148,6 +157,14 @@ export default {
             intakeProducer: false,
           },
         });
+      else if (path === "/api/inventory" && method === "GET")
+        result = json(
+          await listInventory(
+            env.DB,
+            inventoryEpisodeParameter(url.searchParams.get("episodeId")),
+            url.searchParams.get("after"),
+          ),
+        );
       else if (path === "/api/publication" && method === "GET")
         result = json(await publicationStatus(env));
       else if (path === "/api/publication/sync" && method === "POST") {

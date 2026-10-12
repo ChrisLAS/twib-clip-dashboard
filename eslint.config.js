@@ -1,7 +1,13 @@
 import js from "@eslint/js";
 import ts from "typescript-eslint";
 export default ts.config(
-  { ignores: ["**/dist/**", "**/node_modules/**"] },
+  {
+    ignores: [
+      "**/dist/**",
+      "**/node_modules/**",
+      "apps/worker/src/inventory/validator.generated.js",
+    ],
+  },
   js.configs.recommended,
   ...ts.configs.recommended,
   { rules: { "@typescript-eslint/no-explicit-any": "error" } },

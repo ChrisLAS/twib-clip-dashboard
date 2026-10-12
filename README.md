@@ -90,3 +90,14 @@ GET/HEAD `/media/:renderId/original` or `/proxy`; optional `?download=1`. The se
 - [Portable local producer](packages/producer/README.md): hash-verified checkpoints, interruption recovery and a manifest bridge; no live producer connection
 
 The aggregate test run requires Node24+, Python3, ffmpeg and ffprobe. It runs the portable producer's Python safety/recovery regressions through its Vitest wrapper, plus a real render/manifest-schema compatibility check. Missing dependencies fail rather than silently skip. Hosted CI installs ffmpeg from its normal Ubuntu package source when absent.
+
+## Number One inventory foundation (disabled)
+
+The separate [metadata inventory receiver](docs/number-one-inventory.md) preserves
+producer observations and durable receipts without changing curated clips or
+playback readiness. Its producer HTTP namespace is hard-disabled; owner-only
+inventory reads are implemented as an API foundation. No machine authentication,
+sender, live connection, UI, migration application or deployment is included.
+
+Use the [commit-pinned GitHub handoff](docs/number-one-github-workflow.md) for the
+next disabled Nomad prototype change; an archive transfer is unnecessary.
