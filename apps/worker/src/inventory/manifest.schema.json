@@ -4,139 +4,585 @@
   "title": "Number One local TWiB inventory v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "source_id", "episode", "snapshot", "coverage", "items", "warnings", "idempotency_digest", "observed_at", "scan_finished_at"],
+  "required": [
+    "schema",
+    "source_id",
+    "episode",
+    "snapshot",
+    "coverage",
+    "items",
+    "warnings",
+    "idempotency_digest",
+    "observed_at",
+    "scan_finished_at"
+  ],
   "properties": {
-    "schema": {"const": "number-one-twib-inventory/v1"},
-    "source_id": {"const": "nomad:number-one"},
+    "schema": {
+      "const": "number-one-twib-inventory/v1"
+    },
+    "source_id": {
+      "const": "nomad:number-one"
+    },
     "episode": {
-      "type": "object", "additionalProperties": false,
-      "required": ["id", "show", "number"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "show",
+        "number"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^episode_[0-9a-f]{64}$"},
-        "show": {"const": "twib"},
-        "number": {"type": "integer", "minimum": 1, "maximum": 999999}
-      }
-    },
-    "snapshot": {
-      "type": "object", "additionalProperties": false,
-      "required": ["mode", "complete", "allow_deletions", "scope", "consistency", "candidate_coverage"],
-      "properties": {
-        "mode": {"const": "full"},
-        "complete": {"type": "boolean"},
-        "allow_deletions": {"const": false},
-        "scope": {"const": "episode_media_and_allowlisted_local_artifacts"},
-        "consistency": {"const": "metadata_double_scan_not_atomic"},
-        "candidate_coverage": {"const": "partial"}
-      }
-    },
-    "coverage": {
-      "type": "array", "items": {
-        "type": "object", "additionalProperties": false,
-        "required": ["artifact", "status"],
-        "properties": {
-          "artifact": {"anyOf": [{"$ref": "#/$defs/ref"}, {"type": "null"}]},
-          "status": {"enum": ["read", "invalid", "absent"]}
+        "id": {
+          "type": "string",
+          "pattern": "^episode_[0-9a-f]{64}$"
+        },
+        "show": {
+          "const": "twib"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 999999
         }
       }
     },
-    "items": {"type": "array", "items": {"$ref": "#/$defs/item"}},
-    "warnings": {"type": "array", "uniqueItems": true, "items": {"type": "string", "maxLength": 128}},
-    "idempotency_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "observed_at": {"$ref": "#/$defs/time"},
-    "scan_finished_at": {"$ref": "#/$defs/time"}
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "complete",
+        "allow_deletions",
+        "scope",
+        "consistency",
+        "candidate_coverage"
+      ],
+      "properties": {
+        "mode": {
+          "const": "full"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "allow_deletions": {
+          "const": false
+        },
+        "scope": {
+          "const": "episode_media_and_allowlisted_local_artifacts"
+        },
+        "consistency": {
+          "const": "metadata_double_scan_not_atomic"
+        },
+        "candidate_coverage": {
+          "const": "partial"
+        }
+      }
+    },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "artifact",
+          "status"
+        ],
+        "properties": {
+          "artifact": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ref"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "read",
+              "invalid",
+              "absent"
+            ]
+          }
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/item"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 128
+      }
+    },
+    "idempotency_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "observed_at": {
+      "$ref": "#/$defs/time"
+    },
+    "scan_finished_at": {
+      "$ref": "#/$defs/time"
+    }
   },
   "$defs": {
-    "ref": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[?\\\\]).+$"},
-    "time": {"type": "string", "format": "date-time"},
-    "nullableNumber": {"type": ["number", "null"], "minimum": 0},
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[?\\\\]).+$"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "nullableNumber": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
     "media": {
-      "type": "object", "additionalProperties": false,
-      "required": ["ref", "present", "size_bytes", "modified_at", "duration_seconds"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "present",
+        "size_bytes",
+        "modified_at",
+        "duration_seconds"
+      ],
       "properties": {
-        "ref": {"$ref": "#/$defs/ref"},
-        "present": {"type": "boolean"},
-        "size_bytes": {"type": ["integer", "null"], "minimum": 0},
-        "modified_at": {"anyOf": [{"$ref": "#/$defs/time"}, {"type": "null"}]},
-        "duration_seconds": {"$ref": "#/$defs/nullableNumber"}
+        "ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "size_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "modified_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration_seconds": {
+          "$ref": "#/$defs/nullableNumber"
+        }
       }
     },
     "observation": {
-      "type": "object", "additionalProperties": false,
-      "required": ["artifact", "status", "context", "timestamps"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "status",
+        "context",
+        "timestamps"
+      ],
       "properties": {
-        "artifact": {"anyOf": [{"$ref": "#/$defs/ref"}, {"type": "null"}]},
-        "status": {"enum": ["candidate", "new", "known", "downloaded", "download_failed", "failed", "skipped", "skipped_known_url", "capture_required", "captured", "ok", "noted", "supporting_link", "unknown"]},
-        "capture_method": {"enum": ["yt-dlp", "browser-network"]},
-        "provider": {"enum": ["karakeep", "pinboard"]},
-        "failure_classes": {"type": "array", "uniqueItems": true, "items": {"enum": ["invalid_media", "downloader_failed"]}},
+        "artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "candidate",
+            "new",
+            "known",
+            "downloaded",
+            "download_failed",
+            "failed",
+            "skipped",
+            "skipped_known_url",
+            "capture_required",
+            "captured",
+            "ok",
+            "noted",
+            "supporting_link",
+            "unknown"
+          ]
+        },
+        "capture_method": {
+          "enum": [
+            "yt-dlp",
+            "browser-network"
+          ]
+        },
+        "provider": {
+          "enum": [
+            "karakeep",
+            "pinboard"
+          ]
+        },
+        "failure_classes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "invalid_media",
+              "downloader_failed"
+            ]
+          }
+        },
         "context": {
-          "type": "object", "additionalProperties": false,
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "title": {"type": "string"}, "snippet": {"type": "string"}, "query": {"type": "string"},
-            "why": {"type": "string"}, "rationale": {"type": "string"}, "operator_note": {"type": "string"},
-            "extended": {"type": "string"}, "frame": {"type": "string"}, "freshness_test": {"type": "string"},
-            "listen_for": {"type": "string"}, "channel": {"type": "string"}, "clip_type": {"type": "string"},
-            "reason": {"type": "string"}, "notes": {"type": "string"}
+            "title": {
+              "type": "string"
+            },
+            "snippet": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "why": {
+              "type": "string"
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "operator_note": {
+              "type": "string"
+            },
+            "extended": {
+              "type": "string"
+            },
+            "frame": {
+              "type": "string"
+            },
+            "freshness_test": {
+              "type": "string"
+            },
+            "listen_for": {
+              "type": "string"
+            },
+            "channel": {
+              "type": "string"
+            },
+            "clip_type": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "notes": {
+              "type": "string"
+            }
           }
         },
         "timestamps": {
-          "type": "object", "additionalProperties": false,
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "captured_at": {"$ref": "#/$defs/time"}, "created_at": {"$ref": "#/$defs/time"},
-            "generated_at": {"$ref": "#/$defs/time"}, "updated_at": {"$ref": "#/$defs/time"},
-            "published_at": {"$ref": "#/$defs/time"}, "first_seen_at": {"$ref": "#/$defs/time"},
-            "last_seen_at": {"$ref": "#/$defs/time"}, "downloaded_at": {"$ref": "#/$defs/time"},
-            "failed_at": {"$ref": "#/$defs/time"}, "time": {"$ref": "#/$defs/time"}
+            "captured_at": {
+              "$ref": "#/$defs/time"
+            },
+            "created_at": {
+              "$ref": "#/$defs/time"
+            },
+            "generated_at": {
+              "$ref": "#/$defs/time"
+            },
+            "updated_at": {
+              "$ref": "#/$defs/time"
+            },
+            "published_at": {
+              "$ref": "#/$defs/time"
+            },
+            "first_seen_at": {
+              "$ref": "#/$defs/time"
+            },
+            "last_seen_at": {
+              "$ref": "#/$defs/time"
+            },
+            "downloaded_at": {
+              "$ref": "#/$defs/time"
+            },
+            "failed_at": {
+              "$ref": "#/$defs/time"
+            },
+            "time": {
+              "$ref": "#/$defs/time"
+            }
           }
         },
         "metrics": {
-          "type": "object", "additionalProperties": false,
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "duration_seconds": {"type": "number", "minimum": 0},
-            "score": {"type": "number", "minimum": 0},
-            "priority": {"type": "number", "minimum": 0},
-            "heuristic_score": {"type": "number", "minimum": 0}
+            "duration_seconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "score": {
+              "type": "number",
+              "minimum": 0
+            },
+            "priority": {
+              "type": "number",
+              "minimum": 0
+            },
+            "heuristic_score": {
+              "type": "number",
+              "minimum": 0
+            }
           }
         }
       }
     },
     "item": {
-      "type": "object", "additionalProperties": false,
-      "required": ["id", "kind", "media", "observations", "origins", "processing_status", "ready"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "media",
+        "observations",
+        "origins",
+        "processing_status",
+        "ready"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^item_[0-9a-f]{64}$"},
-        "kind": {"enum": ["candidate", "media"]},
-        "media": {"anyOf": [{"$ref": "#/$defs/media"}, {"type": "null"}]},
-        "observations": {"type": "array", "items": {"$ref": "#/$defs/observation"}},
+        "id": {
+          "type": "string",
+          "pattern": "^item_[0-9a-f]{64}$"
+        },
+        "kind": {
+          "enum": [
+            "candidate",
+            "media"
+          ]
+        },
+        "media": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/media"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/observation"
+          }
+        },
         "origins": {
-          "type": "array", "items": {
-            "type": "object", "additionalProperties": false, "required": ["id", "url"],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "url"
+            ],
             "properties": {
-              "id": {"type": "string", "pattern": "^origin_[0-9a-f]{64}$"},
-              "url": {"type": "string", "format": "uri", "pattern": "^https?://"}
+              "id": {
+                "type": "string",
+                "pattern": "^origin_[0-9a-f]{64}$"
+              },
+              "url": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https?://"
+              }
             }
           }
         },
-        "processing_status": {"enum": ["candidate", "capture_required", "failed", "captured_observed", "unverified", "incomplete", "missing", "quarantined"]},
-        "ready": {"const": false},
+        "processing_status": {
+          "enum": [
+            "candidate",
+            "capture_required",
+            "failed",
+            "captured_observed",
+            "unverified",
+            "incomplete",
+            "missing",
+            "quarantined"
+          ]
+        },
+        "ready": {
+          "const": false
+        },
         "capture_evidence": {
-          "type": "array", "items": {
-            "type": "object", "additionalProperties": false,
-            "required": ["artifact", "matches_observed_size", "content_hash_verified", "streams_reprobed"],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "artifact",
+              "matches_observed_size",
+              "content_hash_verified",
+              "streams_reprobed"
+            ],
             "properties": {
-              "artifact": {"anyOf": [{"$ref": "#/$defs/ref"}, {"type": "null"}]},
-              "matches_observed_size": {"type": "boolean"},
-              "content_hash_verified": {"const": false},
-              "streams_reprobed": {"const": false},
-              "producer_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              "artifact": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ref"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "matches_observed_size": {
+                "type": "boolean"
+              },
+              "content_hash_verified": {
+                "const": false
+              },
+              "streams_reprobed": {
+                "const": false
+              },
+              "producer_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
             }
           }
+        },
+        "producer_record": {
+          "$ref": "#/$defs/producer_record"
         }
       },
       "allOf": [
-        {"if": {"properties": {"kind": {"const": "media"}}}, "then": {"properties": {"media": {"$ref": "#/$defs/media"}}}},
-        {"if": {"properties": {"kind": {"const": "candidate"}}}, "then": {"properties": {"media": {"type": "null"}}}}
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "media"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "media": {
+                "$ref": "#/$defs/media"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "candidate"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "media": {
+                "type": "null"
+              }
+            }
+          }
+        }
       ]
+    },
+    "producer_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clip_id",
+        "record_kind",
+        "first_seen_at",
+        "source_signature",
+        "parent_clip_id"
+      ],
+      "properties": {
+        "clip_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "record_kind": {
+          "enum": [
+            "manual-layout",
+            "processing-history",
+            "capture-job"
+          ]
+        },
+        "first_seen_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_signature": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 128,
+              "pattern": "^[0-9]+:[0-9]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent_clip_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clip_uid": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     }
   }
 }

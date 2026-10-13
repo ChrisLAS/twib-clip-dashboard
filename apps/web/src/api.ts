@@ -2,6 +2,8 @@ import type {
   InventoryResponse,
   InventoryStatus,
   InventoryGroup,
+  InventoryReview,
+  InventoryReviewInput,
 } from "@twib/shared";
 import type {
   ApiError,
@@ -58,6 +60,10 @@ export const api = {
       status: InventoryStatus | null;
       query: string;
       after: string | null;
+      sort?: "filename" | "first_observed";
+      direction?: "asc" | "desc";
+      review?: "all" | "unreviewed" | "approved" | "rejected" | "cut_down";
+      groupFolders?: boolean;
     },
     signal?: AbortSignal,
   ) => {
@@ -68,11 +74,22 @@ export const api = {
     if (input.status) params.set("status", input.status);
     if (input.query) params.set("q", input.query);
     if (input.after) params.set("after", input.after);
+    if (input.sort) params.set("sort", input.sort);
+    if (input.direction) params.set("direction", input.direction);
+    if (input.review) params.set("review", input.review);
+    if (input.groupFolders !== undefined)
+      params.set("groupFolders", String(input.groupFolders));
     return request<InventoryResponse>(
       `/api/inventory?${params}`,
       readOptions(signal),
     );
   },
+  inventoryReview: (body: InventoryReviewInput, csrf: string) =>
+    request<InventoryReview>("/api/inventory/review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+      body: JSON.stringify(body),
+    }),
   importApproved: async (csrf: string, signal?: AbortSignal) => {
     try {
       return await request<{ imported: number }>("/api/import", {

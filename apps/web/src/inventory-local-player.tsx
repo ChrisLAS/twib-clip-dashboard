@@ -20,8 +20,8 @@ export function InventoryLocalPlayer({
 }: {
   selection: LocalPlaybackSelection;
   active: boolean;
-  note: string;
-  onNote: (value: string) => void;
+  note?: string;
+  onNote?: (value: string) => void;
   onClose: () => void;
 }) {
   const [url, setUrl] = useState<string | null>(null);
@@ -49,7 +49,7 @@ export function InventoryLocalPlayer({
     setError(
       player.current?.error?.code === 4
         ? "This browser cannot decode the selected media format or codecs. Capture status is unchanged. Try another browser or a separately prepared compatible file."
-        : "The selected local file could not be read or decoded. It may have changed during sync. Select the file again; capture status and your session note are unchanged.",
+        : "The selected local file could not be read or decoded. It may have changed during sync. Select the file again; capture status and your notes are unchanged.",
     );
   }
   const props = {
@@ -112,19 +112,21 @@ export function InventoryLocalPlayer({
         {selection.mtimeDiffers &&
           "Local modification time differs; sync can change timestamps."}
       </p>
-      <label className="inventory-local-note">
-        Session note · separate from the episode slate
-        <textarea
-          value={note}
-          maxLength={4000}
-          onChange={(event) => onNote(event.target.value)}
-          placeholder="Private draft in this tab; not saved or sent"
-        />
-      </label>
+      {onNote && (
+        <label className="inventory-local-note">
+          Session note · separate from the episode slate
+          <textarea
+            value={note}
+            maxLength={4000}
+            onChange={(event) => onNote(event.target.value)}
+            placeholder="Private draft in this tab; not saved or sent"
+          />
+        </label>
+      )}
       <p className="muted">
         Selecting files uploads nothing. Browser reload requires selecting them
-        again and clears session notes. Existing selections are browser
-        snapshots; sync changes require a new selection.
+        again{onNote ? " and clears session notes" : ""}. Existing selections
+        are browser snapshots; sync changes require a new selection.
       </p>
     </section>
   );

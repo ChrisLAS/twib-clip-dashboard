@@ -726,6 +726,7 @@ function App() {
           </div>
         )}
         <InventoryPanel
+          csrfToken={session?.csrfToken}
           active={
             !clip && workspaceView === "inventory" && (!!session || !!demo)
           }
@@ -1661,7 +1662,7 @@ function ReviewDesk({
             </div>
             <div className="decision-buttons">
               <button
-                className="approve"
+                className="review-decision-button review-approved"
                 disabled={pending}
                 aria-pressed={r.review.decision === "up"}
                 onClick={() => onDecide(clip, "up", note, reason)}
@@ -1671,6 +1672,7 @@ function ReviewDesk({
               </button>
               <button
                 disabled={pending}
+                className="review-decision-button review-rejected"
                 aria-pressed={r.review.decision === "down"}
                 onClick={() => onDecide(clip, "down", note, reason)}
               >
@@ -1679,6 +1681,7 @@ function ReviewDesk({
               </button>
               <button
                 disabled={pending}
+                className="review-decision-button review-deferred"
                 aria-pressed={r.review.decision === "defer"}
                 onClick={() => onDecide(clip, "defer", note, reason)}
               >
@@ -1686,7 +1689,8 @@ function ReviewDesk({
                 Defer
               </button>
               <button
-                className="quiet"
+                className="review-decision-button review-unreviewed quiet"
+                aria-pressed={r.review.decision === "clear"}
                 disabled={pending || r.review.decision === "clear"}
                 onClick={() => onDecide(clip, "clear", note, reason)}
               >

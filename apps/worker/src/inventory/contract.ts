@@ -5,12 +5,14 @@ import {
   validateEnvelope as validateEnvelopeSchema,
 } from "./validator.generated.js";
 import { HttpError } from "../errors";
+import type { InventoryProducerRecord } from "@twib/shared";
 
 export const INVENTORY_SOURCE = "nomad:number-one";
 // Deliberately smaller than the proposal: one D1 row must remain below 2,000,000 bytes.
 export const INVENTORY_MAX_BYTES = 1024 * 1024;
 export const INVENTORY_MAX_ITEMS = 2000;
 export interface InventoryItem {
+  producer_record?: InventoryProducerRecord;
   id: string;
   kind: "candidate" | "media";
   media: null | {
@@ -274,6 +276,12 @@ export async function validateInventory(
   for (const row of manifest.coverage) safeRef(row.artifact);
   const ids = new Set<string>();
   for (const item of manifest.items) {
+    if (
+      item.producer_record &&
+      (item.kind !== "media" ||
+        containsRecognizableSecret(JSON.stringify(item.producer_record)))
+    )
+      throw invalid("INVENTORY_PRIVACY_REJECTED");
     if (ids.has(item.id)) throw invalid("INVENTORY_DUPLICATE_ITEM");
     ids.add(item.id);
     if (new TextEncoder().encode(JSON.stringify(item)).byteLength > 32768)
