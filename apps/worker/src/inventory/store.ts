@@ -1,6 +1,8 @@
 import { HttpError } from "../errors";
 import {
   INVENTORY_STATUSES,
+  INVENTORY_GROUPS,
+  type InventoryGroup,
   type InventoryResponse,
   type InventoryStatus,
 } from "../../../../packages/shared/src/inventory";
@@ -187,7 +189,14 @@ export function inventoryEpisodeParameter(value: string | null): string {
 // The human-readable selector names the separately registered pilot scope. It
 // never infers an association with the current curated dashboard workspace.
 export async function inventoryEpisodeSelection(params: URLSearchParams) {
-  for (const name of ["episodeId", "episodeNumber", "after", "status", "q"])
+  for (const name of [
+    "episodeId",
+    "episodeNumber",
+    "after",
+    "group",
+    "status",
+    "q",
+  ])
     if (params.getAll(name).length > 1)
       throw new HttpError(
         422,
@@ -222,6 +231,7 @@ export async function inventoryEpisodeSelection(params: URLSearchParams) {
 }
 
 interface InventoryListOptions {
+  group?: string | null;
   status?: string | null;
   query?: string | null;
   episodeNumber?: number | null;
@@ -240,10 +250,28 @@ const latestItemsSql = `
       AND newest.item_id=i.item_id ORDER BY sequence DESC LIMIT 1
   )`;
 
+// These are browsing groups, never playable/readiness assertions. Completed
+// WebM remains visible as media; incomplete suffixes and unknown formats need
+// attention. Candidates are research metadata rather than audio/video files.
+const groupedLatestItemsSql = `
+  SELECT retained.*,CASE
+    WHEN json_extract(retained.item_json,'$.kind')='media'
+      AND json_extract(retained.item_json,'$.processing_status')='captured_observed'
+      AND json_extract(retained.item_json,'$.media.present')=1
+      AND (substr(lower(coalesce(json_extract(retained.item_json,'$.media.ref'),'')),-4)
+        IN ('.mp4','.m4v','.mov','.mkv','.avi','.mp3','.m4a','.aac','.wav','.ogg')
+        OR substr(lower(coalesce(json_extract(retained.item_json,'$.media.ref'),'')),-5)
+        IN ('.webm','.flac','.opus','.aiff')) THEN 'media'
+    WHEN json_extract(retained.item_json,'$.kind')='candidate'
+      AND json_extract(retained.item_json,'$.processing_status')='candidate' THEN 'research'
+    ELSE 'attention' END item_group
+  FROM (${latestItemsSql}) retained`;
+
 // All values are bound. INSTR makes %, _ and SQL-shaped text literal searches,
 // and deliberately searches reference metadata rather than prose or origins.
 const matchesFilterSql = `
-  (filters.status IS NULL OR json_extract(latest.item_json,'$.processing_status')=filters.status)
+  (filters.group_name='all' OR latest.item_group=filters.group_name)
+  AND (filters.status IS NULL OR json_extract(latest.item_json,'$.processing_status')=filters.status)
   AND (filters.query='' OR instr(lower(latest.item_id),filters.query)>0
     OR instr(lower(coalesce(json_extract(latest.item_json,'$.media.ref'),'')),filters.query)>0
     OR EXISTS (SELECT 1 FROM json_each(latest.item_json,'$.observations') artifact
@@ -265,6 +293,13 @@ export async function listInventory(
       "INVENTORY_CURSOR_INVALID",
       "Invalid inventory cursor.",
     );
+  const group = options.group ?? "all";
+  if (!INVENTORY_GROUPS.includes(group as InventoryGroup))
+    throw new HttpError(
+      422,
+      "INVENTORY_GROUP_INVALID",
+      "Choose a supported inventory group.",
+    );
   const status = options.status ?? null;
   if (
     status !== null &&
@@ -283,30 +318,43 @@ export async function listInventory(
       "Inventory search must be at most 200 characters without control characters.",
     );
   const query = rawQuery.trim();
-  const filterValues = [status, query.toLowerCase()];
+  const filterValues = [group, status, query.toLowerCase()];
   // One small aggregate result, never an application-side load of all items.
   const counts = await db
     .prepare(
-      `WITH latest AS (${latestItemsSql}), filters AS (SELECT ? status,? query)
-      SELECT json_extract(latest.item_json,'$.processing_status') status,
+      `WITH latest AS (${groupedLatestItemsSql}), filters AS (SELECT ? group_name,? status,? query)
+      SELECT json_extract(latest.item_json,'$.processing_status') status,latest.item_group group_name,
         COUNT(*) total,SUM(CASE WHEN ${matchesFilterSql} THEN 1 ELSE 0 END) matched
-      FROM latest CROSS JOIN filters GROUP BY json_extract(latest.item_json,'$.processing_status')`,
+      FROM latest CROSS JOIN filters GROUP BY json_extract(latest.item_json,'$.processing_status'),latest.item_group`,
     )
     .bind(INVENTORY_SOURCE, episode, ...filterValues)
-    .all<{ status: InventoryStatus; total: number; matched: number }>();
+    .all<{
+      status: InventoryStatus;
+      group_name: Exclude<InventoryGroup, "all">;
+      total: number;
+      matched: number;
+    }>();
   const statusCounts = Object.fromEntries(
     INVENTORY_STATUSES.map((value) => [value, 0]),
   ) as Record<InventoryStatus, number>;
+  const groupCounts: Record<InventoryGroup, number> = {
+    all: 0,
+    media: 0,
+    research: 0,
+    attention: 0,
+  };
   let totalItems = 0;
   let matchedItems = 0;
   for (const row of counts.results) {
-    statusCounts[row.status] = row.total;
+    statusCounts[row.status] += row.total;
+    groupCounts[row.group_name] += row.total;
+    groupCounts.all += row.total;
     totalItems += row.total;
     matchedItems += row.matched;
   }
   const rows = await db
     .prepare(
-      `WITH latest AS (${latestItemsSql}), filters AS (SELECT ? status,? query)
+      `WITH latest AS (${groupedLatestItemsSql}), filters AS (SELECT ? group_name,? status,? query)
       SELECT latest.*,s.accepted_at,json_extract(s.receipt_json,'$.complete') receipt_complete,
         json_extract(s.receipt_json,'$.scope') receipt_scope
       FROM latest JOIN inventory_snapshots s ON s.receipt_id=latest.receipt_id CROSS JOIN filters
@@ -375,8 +423,12 @@ export async function listInventory(
     ingestionPaused: !ingestionEnabled,
     identityCaveat:
       "Media IDs change on rename; redacted candidate URLs can merge identities.",
-    filters: { status: status as InventoryStatus | null, query },
-    summary: { totalItems, matchedItems, statusCounts },
+    filters: {
+      group: group as InventoryGroup,
+      status: status as InventoryStatus | null,
+      query,
+    },
+    summary: { totalItems, matchedItems, statusCounts, groupCounts },
     latestReceivedAt: arrival?.accepted_at ?? null,
     latestObservedAt: recentReceipts[0]?.observedAt ?? null,
     latestReceipt: recentReceipts[0] ?? null,

@@ -501,6 +501,7 @@ describe("owner inventory read model", () => {
     expect(view.summary).toEqual({
       totalItems: 43,
       matchedItems: 43,
+      groupCounts: { all: 43, media: 0, research: 0, attention: 43 },
       statusCounts: {
         candidate: 0,
         capture_required: 21,
@@ -609,6 +610,243 @@ describe("owner inventory read model", () => {
       ).items,
     ).toHaveLength(0);
   });
+  function asObservedMedia(
+    item: InventoryManifest["items"][number],
+    ref: string,
+  ) {
+    item.kind = "media";
+    item.processing_status = "captured_observed";
+    item.media = {
+      ref,
+      present: true,
+      size_bytes: 1,
+      modified_at: null,
+      duration_seconds: null,
+    };
+    item.capture_evidence = [
+      {
+        artifact: "capture-receipts/synthetic.json",
+        matches_observed_size: true,
+        content_hash_verified: false,
+        streams_reprobed: false,
+        producer_sha256: "a".repeat(64),
+      },
+    ];
+  }
+  it("paginates separate media, research and attention groups while retaining global counts", async () => {
+    const manifest = copy();
+    manifest.items = syntheticItems(69);
+    for (const [index, item] of manifest.items.entries()) {
+      if (index % 3 === 0) asObservedMedia(item, `synthetic-${index}.mp4`);
+      else item.processing_status = index % 3 === 1 ? "candidate" : "failed";
+      item.observations[0].artifact =
+        index % 2 === 0
+          ? "transcripts/synthetic-group-match.json"
+          : "transcripts/synthetic-unrelated.json";
+    }
+    await accept(manifest);
+    const all = await listInventory(db, manifest.episode.id);
+    expect(all.filters.group).toBe("all");
+    expect(all.summary.totalItems).toBe(69);
+    expect(all.summary.matchedItems).toBe(69);
+    expect(all.summary.groupCounts).toEqual({
+      all: 69,
+      media: 23,
+      research: 23,
+      attention: 23,
+    });
+    const groupIds: string[] = [];
+    for (const group of ["media", "research", "attention"] as const) {
+      const first = await listInventory(db, manifest.episode.id, null, {
+        group,
+      });
+      expect(first.filters.group).toBe(group);
+      expect(first.items).toHaveLength(20);
+      expect(first.summary).toEqual({ ...all.summary, matchedItems: 23 });
+      const next = await listInventory(
+        db,
+        manifest.episode.id,
+        first.nextCursor,
+        { group },
+      );
+      expect(next.items).toHaveLength(3);
+      expect(next.nextCursor).toBeNull();
+      const ids = [...first.items, ...next.items].map((item) => item.id);
+      expect(new Set(ids).size).toBe(23);
+      groupIds.push(...ids);
+    }
+    expect(new Set(groupIds).size).toBe(69);
+    const search = await listInventory(db, manifest.episode.id, null, {
+      group: "media",
+      status: "captured_observed",
+      query: "synthetic-group-match",
+    });
+    expect(search.summary).toEqual({ ...all.summary, matchedItems: 12 });
+    expect(search.items).toHaveLength(12);
+    const incompatible = await listInventory(db, manifest.episode.id, null, {
+      group: "media",
+      status: "candidate",
+    });
+    expect(incompatible.items).toEqual([]);
+    expect(incompatible.summary).toEqual({ ...all.summary, matchedItems: 0 });
+    const replacement = changed();
+    replacement.items = [structuredClone(manifest.items[0])];
+    replacement.items[0].processing_status = "incomplete";
+    replacement.snapshot.complete = false;
+    await accept(replacement);
+    const updated = await listInventory(db, manifest.episode.id, null, {
+      group: "media",
+    });
+    expect(updated.summary.totalItems).toBe(69);
+    expect(updated.summary.matchedItems).toBe(22);
+    expect(updated.summary.groupCounts).toEqual({
+      all: 69,
+      media: 22,
+      research: 23,
+      attention: 24,
+    });
+    expect(updated.summary.statusCounts.captured_observed).toBe(22);
+    expect(updated.summary.statusCounts.incomplete).toBe(1);
+  });
+  it("requires observed capture and a recognized audio/video suffix for the media group", async () => {
+    const suffixes = [
+      "mp4",
+      "m4v",
+      "mov",
+      "webm",
+      "mkv",
+      "avi",
+      "mp3",
+      "m4a",
+      "aac",
+      "wav",
+      "flac",
+      "ogg",
+      "opus",
+      "aiff",
+    ];
+    const refs = [
+      ...suffixes.map((suffix) => `synthetic.${suffix.toUpperCase()}`),
+      "synthetic.mp4.part",
+      "synthetic.part",
+      "synthetic.json",
+      "synthetic.mp4.tmp",
+    ];
+    const manifest = copy();
+    manifest.items = syntheticItems(refs.length + 6);
+    for (const [index, ref] of refs.entries())
+      asObservedMedia(manifest.items[index], ref);
+    const attentionStatuses = [
+      "unverified",
+      "incomplete",
+      "missing",
+      "quarantined",
+    ];
+    for (const [index, status] of attentionStatuses.entries()) {
+      const item = manifest.items[refs.length + index];
+      asObservedMedia(item, "synthetic.mp4");
+      item.processing_status = status;
+      item.media!.present = status !== "missing";
+    }
+    manifest.items[refs.length + 4].processing_status = "candidate";
+    manifest.items[refs.length + 5].processing_status = "capture_required";
+    await accept(manifest);
+    const media = await listInventory(db, manifest.episode.id, null, {
+      group: "media",
+    });
+    expect(media.items.map((item) => item.variants[0].item.media?.ref)).toEqual(
+      refs.slice(0, suffixes.length),
+    );
+    expect(media.summary.groupCounts).toEqual({
+      all: 24,
+      media: 14,
+      research: 1,
+      attention: 9,
+    });
+    expect(media.summary.statusCounts.captured_observed).toBe(18);
+    expect(
+      media.items.every(
+        (item) =>
+          item.readiness === "not_evaluated" &&
+          item.variants[0].item.ready === false,
+      ),
+    ).toBe(true);
+    const capturedAttention = await listInventory(
+      db,
+      manifest.episode.id,
+      null,
+      { group: "attention", status: "captured_observed" },
+    );
+    expect(capturedAttention.items).toHaveLength(4);
+    expect(capturedAttention.summary.matchedItems).toBe(4);
+    expect(capturedAttention.summary.statusCounts.captured_observed).toBe(18);
+  });
+  it("keeps inconsistent recorded kind, status, presence and reference metadata in attention", async () => {
+    const manifest = copy();
+    asObservedMedia(manifest.items[0], "synthetic.mp4");
+    await accept(manifest);
+    const item = manifest.items[0];
+    const inconsistent = [
+      { ...item, media: { ...item.media!, present: false } },
+      { ...item, media: null },
+      { ...item, media: { ...item.media!, ref: "" } },
+      { ...item, kind: "candidate" },
+      { ...item, processing_status: "candidate" },
+    ];
+    // Simulate inconsistent historical rows without relaxing ingest validation.
+    for (const recorded of inconsistent) {
+      sqlite
+        .prepare(
+          "UPDATE inventory_observations SET item_json=? WHERE item_id=?",
+        )
+        .run(JSON.stringify(recorded), item.id);
+      const media = await listInventory(db, manifest.episode.id, null, {
+        group: "media",
+      });
+      expect(media.items).toHaveLength(0);
+      expect(media.summary.groupCounts).toEqual({
+        all: 1,
+        media: 0,
+        research: 0,
+        attention: 1,
+      });
+      const attention = await listInventory(db, manifest.episode.id, null, {
+        group: "attention",
+      });
+      expect(attention.items).toHaveLength(1);
+    }
+  });
+  it("routes group filters and rejects invalid or duplicate group selectors", async () => {
+    await accept();
+    const env = { APP_ENV: "local", LOCAL_DEMO: "true", DB: db } as Env;
+    const read = (params: string) =>
+      worker.fetch(
+        new Request(
+          `http://localhost/api/inventory?episodeNumber=127&${params}`,
+        ),
+        env,
+      );
+    const media = await read("group=media");
+    expect(media.status).toBe(200);
+    expect(await media.json()).toMatchObject({
+      filters: { group: "media" },
+      summary: { totalItems: 1, matchedItems: 0 },
+      items: [],
+    });
+    const attention = await read("group=attention&status=capture_required");
+    expect(attention.status).toBe(200);
+    expect(await attention.json()).toMatchObject({
+      filters: { group: "attention" },
+      summary: { totalItems: 1, matchedItems: 1 },
+    });
+    for (const params of [
+      "group=unsupported",
+      "group=collected",
+      "group=",
+      "group=all&group=attention",
+    ])
+      expect((await read(params)).status).toBe(422);
+  });
   it("keeps source and episode isolation for counts, filters and receipts", async () => {
     const receipt = await accept();
     const otherEpisode = await inventoryEpisodeId(128);
@@ -677,6 +915,10 @@ describe("owner inventory read model", () => {
     expect(view.summary.statusCounts.failed).toBe(1);
   });
   it.each([
+    { group: "ready" },
+    { group: "" },
+    { group: "collected" },
+    { group: "all' OR 1=1 --" },
     { status: "ready" },
     { status: "" },
     { query: "x".repeat(201) },
@@ -734,7 +976,7 @@ describe("owner inventory read model", () => {
       ).rejects.toMatchObject({ status: 422 });
     },
   );
-  it.each(["episodeNumber", "episodeId", "after", "status", "q"])(
+  it.each(["episodeNumber", "episodeId", "after", "group", "status", "q"])(
     "rejects duplicate query parameters: %s",
     async (name) => {
       const params = new URLSearchParams("episodeNumber=127");

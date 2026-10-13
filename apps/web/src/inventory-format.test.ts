@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { INVENTORY_STATUSES } from "@twib/shared";
 import {
   inventoryBytes,
+  inventoryFormatHint,
   inventoryStatusLabels,
   inventoryStatusNotes,
   inventoryTimestamp,
@@ -52,5 +53,23 @@ describe("read-only inventory presentation", () => {
     expect(inventoryView("https://example.com/?view=unrecognized")).toBe(
       "slate",
     );
+  });
+});
+
+describe("filename format hints", () => {
+  it("flags WebM preference without claiming failure or verified media", () => {
+    expect(inventoryFormatHint("synthetic/CAPTURE.WEBM")).toBe(
+      "WebM filename · conversion needed for MP4 preference",
+    );
+    expect(inventoryFormatHint("synthetic/audio.mp3")).toBeNull();
+  });
+  it("does not mistake a partial suffix for finished MP4", () => {
+    expect(inventoryFormatHint("synthetic/video.mp4.part")).toContain(
+      "Partial-file suffix",
+    );
+    expect(inventoryFormatHint("synthetic/video.mp4")).toContain(
+      "not verified",
+    );
+    expect(inventoryFormatHint(null)).toBeNull();
   });
 });

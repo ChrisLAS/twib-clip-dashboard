@@ -60,3 +60,34 @@ The inventory entry is unavailable during active clip review. Review drafts and
 slate filters remain in their existing state; navigating between the two
 workspaces does not submit editorial changes. Browser Back/Forward restores the
 workspace view, and obsolete inventory reads are aborted/ignored.
+
+## Reporter and media/review grouping
+
+The reporter is **Number One on Nomad**. This identifies who submitted the
+inventory, not who downloaded or created each file. The latter is unknown in
+this metadata; manually copied or synchronized files are not attributed to an
+agent without evidence.
+
+The UI defaults to **Media files**. Research candidates and records needing
+review remain one click away, with visible counts; **All inventory** retains the
+original ungrouped view. Counts are global, not just the loaded page.
+
+`group=media|research|attention|all` is an optional owner-read parameter; omission
+defaults to `all` for API compatibility. The group is combined with status and
+search before pagination. Media requires a source-observed media file with
+`captured_observed` status and a recognized audio/video suffix. Candidate-kind
+records in candidate status are research. Everything else is needs review,
+including failed, partial, quarantined, missing, unverified and ambiguous records.
+This is a presentation classification, not a change to source status/readiness.
+
+A filename is only a format hint. MP4 video is preferred, but an MP4 suffix does
+not verify codecs or playback. Existing WebM remains visible with a conversion
+preference flag; it is not renamed, converted or marked failed. Audio formats
+are not flagged solely because they are not MP4. A `.part` suffix cannot enter
+the main media group. No records are deleted or silently dropped.
+
+The needs-review section explicitly says re-download requests are not connected.
+There is no pretend retry control, producer write or new credential permission.
+A future retry workflow needs a separately reviewed job contract, exact source
+identity, owner authorization, durable request/acknowledgement and producer
+results before the UI can truthfully offer that action.

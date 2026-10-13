@@ -91,6 +91,9 @@ export async function runInventoryBrowserRegression({
       ],
     };
   });
+  items[15].variants[0].item.media.ref = "synthetic/captured.webm";
+  items[29].variants[0].item.media.ref = "synthetic/incomplete.mp4";
+  items[35].variants[0].item.media.ref = "synthetic/quarantined.part";
   let emptySnapshot = false,
     failInventory = false,
     failSession = false,
@@ -141,11 +144,24 @@ export async function runInventoryBrowserRegression({
           status: 503,
           json: { error: { message: "Synthetic read unavailable" } },
         });
+      const group = url.searchParams.get("group") || "all";
       const status = url.searchParams.get("status"),
         q = (url.searchParams.get("q") || "").toLowerCase(),
         after = url.searchParams.get("after") || "";
       const matches = (emptySnapshot ? [] : items).filter(
         (i) =>
+          (group === "all" ||
+            group ===
+              (i.variants[0].item.processing_status === "captured_observed" &&
+              i.variants[0].item.kind === "media" &&
+              /\.(mp4|m4v|mov|webm|mkv|avi|mp3|m4a|aac|wav|flac|ogg|opus|aiff)$/i.test(
+                i.variants[0].item.media?.ref || "",
+              )
+                ? "media"
+                : i.variants[0].item.kind === "candidate" &&
+                    i.variants[0].item.processing_status === "candidate"
+                  ? "research"
+                  : "attention")) &&
           (!status || i.variants[0].item.processing_status === status) &&
           (!q ||
             JSON.stringify([
@@ -167,9 +183,15 @@ export async function runInventoryBrowserRegression({
         ingestionPaused: true,
         identityCaveat:
           "Media IDs change on rename; redacted candidate URLs can merge identities.",
-        filters: { status, query: q },
+        filters: { group, status, query: q },
         summary: {
           totalItems: emptySnapshot ? 0 : 48,
+          groupCounts: {
+            all: emptySnapshot ? 0 : 48,
+            media: emptySnapshot ? 0 : 14,
+            research: emptySnapshot ? 0 : 15,
+            attention: emptySnapshot ? 0 : 19,
+          },
           matchedItems: matches.length,
           statusCounts: Object.fromEntries(
             [...new Set(states)].map((s) => [
@@ -202,6 +224,90 @@ export async function runInventoryBrowserRegression({
   const inventoryURL = new URL("?view=inventory", base).href;
   try {
     await page.goto(inventoryURL);
+    await page.getByText("14 matching records", { exact: true }).waitFor();
+    check(
+      "Inventory default separates attention records with visible counts",
+      (await page
+        .getByRole("button", { name: "Needs review 19", exact: true })
+        .isVisible()) &&
+        (await page
+          .getByRole("button", { name: "All inventory 48", exact: true })
+          .isVisible()),
+    );
+    await page
+      .getByRole("textbox", { name: "Search inventory" })
+      .fill("captured.webm");
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await page.getByText("1 matching record for “captured.webm”").waitFor();
+    await page
+      .getByRole("button", { name: "Clear filters", exact: true })
+      .click();
+    await page.getByText("14 matching records", { exact: true }).waitFor();
+    check(
+      "Clearing search preserves media-only group",
+      (await page
+        .locator(
+          ".inventory-tone-candidate,.inventory-tone-incomplete,.inventory-tone-quarantined",
+        )
+        .count()) === 0,
+    );
+    check(
+      "Inventory identifies reporter without inventing downloader",
+      (await page
+        .getByRole("heading", { name: /Reported by Number One/ })
+        .isVisible()) &&
+        (await page.getByText(/does not identify who downloaded/).isVisible()),
+    );
+    check(
+      "Media default excludes research and unfinished records",
+      (await page.locator(".inventory-record").count()) === 14 &&
+        (await page
+          .locator(
+            ".inventory-tone-candidate,.inventory-tone-incomplete,.inventory-tone-quarantined",
+          )
+          .count()) === 0,
+    );
+    check(
+      "Existing WebM stays visible with conversion preference",
+      await page
+        .getByText("WebM filename · conversion needed for MP4 preference", {
+          exact: true,
+        })
+        .isVisible(),
+    );
+    await page
+      .getByRole("button", { name: "Research candidates 15", exact: true })
+      .click();
+    await page.getByText("15 matching records", { exact: true }).waitFor();
+    check(
+      "Research candidates are separate from media",
+      (await page.locator(".inventory-tone-candidate").count()) === 15,
+    );
+    await page
+      .getByRole("button", { name: "Needs review 19", exact: true })
+      .click();
+    await page.getByText("19 matching records", { exact: true }).waitFor();
+    check(
+      "Attention group retains incomplete and quarantined records",
+      (await page.locator(".inventory-tone-incomplete").count()) === 6 &&
+        (await page.locator(".inventory-tone-quarantined").count()) === 13,
+    );
+    check(
+      "Retry capability is not falsely offered",
+      (await page
+        .getByText(/Re-download requests are not connected yet/)
+        .isVisible()) &&
+        (await page
+          .getByRole("button", { name: /Re-download|Retry download/ })
+          .count()) === 0,
+    );
+    await page.screenshot({
+      path: "test-results/inventory-review-desktop.png",
+      fullPage: true,
+    });
+    await page
+      .getByRole("button", { name: "All inventory 48", exact: true })
+      .click();
     await page.getByText("48 matching records", { exact: true }).waitFor();
     check(
       "Inventory direct URL loads total across paginated records",
@@ -243,10 +349,18 @@ export async function runInventoryBrowserRegression({
     emptySnapshot = false;
     await page.getByRole("button", { name: "Refresh stored records" }).click();
     await page.getByText("48 matching records", { exact: true }).waitFor();
+    await page
+      .getByRole("button", { name: "Media files 14", exact: true })
+      .click();
+    await page.getByText("14 matching records", { exact: true }).waitFor();
     await page.screenshot({
       path: "test-results/inventory-desktop.png",
       fullPage: true,
     });
+    await page
+      .getByRole("button", { name: "All inventory 48", exact: true })
+      .click();
+    await page.getByText("48 matching records", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Next records" }).click();
     await page.getByText("Page 2 · up to 20 per page").waitFor();
     await page.locator(".inventory-record").first().waitFor();
@@ -360,7 +474,7 @@ export async function runInventoryBrowserRegression({
       .first()
       .click();
     await page
-      .getByRole("heading", { name: /Collected, not yet curated/ })
+      .getByRole("heading", { name: /Reported by Number One/ })
       .waitFor();
     await page
       .getByRole("button", { name: "Episode slate", exact: true })
@@ -377,7 +491,7 @@ export async function runInventoryBrowserRegression({
         "Synthetic retained draft",
     );
     await page.goto(inventoryURL);
-    await page.getByText("48 matching records", { exact: true }).waitFor();
+    await page.getByText("14 matching records", { exact: true }).waitFor();
     await page.setViewportSize({ width: 390, height: 844 });
     check(
       "Inventory mobile navigation remains available",
@@ -399,6 +513,23 @@ export async function runInventoryBrowserRegression({
       path: "test-results/inventory-mobile.png",
       fullPage: true,
     });
+    await page
+      .getByRole("button", { name: "Needs review 19", exact: true })
+      .click();
+    await page.getByText("19 matching records", { exact: true }).waitFor();
+    await page.locator(".inventory-record summary").first().click();
+    check(
+      "Mobile review section remains available without overflow",
+      await page.evaluate(
+        () =>
+          globalThis.document.documentElement.scrollWidth <=
+          globalThis.innerWidth,
+      ),
+    );
+    await page.screenshot({
+      path: "test-results/inventory-review-mobile.png",
+      fullPage: true,
+    });
     failSession = true;
     await page.reload();
     await page.getByRole("button", { name: "Retry owner session" }).waitFor();
@@ -408,7 +539,7 @@ export async function runInventoryBrowserRegression({
     );
     failSession = false;
     await page.getByRole("button", { name: "Retry owner session" }).click();
-    await page.getByText("48 matching records", { exact: true }).waitFor();
+    await page.getByText("14 matching records", { exact: true }).waitFor();
     check(
       "Inventory flow is entirely read-only",
       requests.every((r) => r.method === "GET"),

@@ -71,3 +71,17 @@ export function inventoryViewUrl(href: string, view: "slate" | "inventory") {
   url.hash = "";
   return url.pathname + url.search;
 }
+
+// A filename hint only; it does not inspect container bytes, codecs or playback.
+export function inventoryFormatHint(
+  ref: string | null | undefined,
+): string | null {
+  if (!ref) return null;
+  const ext = ref.split("/").at(-1)?.split(".").at(-1)?.toLowerCase();
+  if (ext === "webm")
+    return "WebM filename · conversion needed for MP4 preference";
+  if (ext === "mp4") return "MP4 filename · codecs and playback not verified";
+  if (ext === "part")
+    return "Partial-file suffix · inspect the reported status";
+  return null;
+}

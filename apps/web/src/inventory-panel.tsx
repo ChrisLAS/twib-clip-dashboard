@@ -10,10 +10,15 @@ import {
   ShieldCheck,
   TriangleAlert,
 } from "lucide-react";
-import type { InventoryResponse, InventoryStatus } from "@twib/shared";
+import type {
+  InventoryResponse,
+  InventoryStatus,
+  InventoryGroup,
+} from "@twib/shared";
 import { api } from "./api";
 import {
   inventoryBytes,
+  inventoryFormatHint,
   inventoryStatusLabels,
   inventoryStatusNotes,
   inventoryTimestamp,
@@ -26,6 +31,7 @@ function InventoryRecord({ record }: { record: RecordItem }) {
     item = variant?.item;
   if (!item) return null;
   const status = item.processing_status;
+  const formatHint = inventoryFormatHint(item.media?.ref);
   const title = item.media?.ref ?? `Candidate ${record.id.slice(-12)}`;
   return (
     <details className={`inventory-record inventory-tone-${status}`}>
@@ -48,6 +54,9 @@ function InventoryRecord({ record }: { record: RecordItem }) {
               ? inventoryBytes(item.media.size_bytes)
               : "Candidate metadata"}
           </small>
+          {formatHint && (
+            <small className="inventory-format-hint">{formatHint}</small>
+          )}
         </span>
         <span className={`inventory-badge ${status}`}>
           {inventoryStatusLabels[status] ?? status}
@@ -68,6 +77,14 @@ function InventoryRecord({ record }: { record: RecordItem }) {
           </p>
         )}
         <dl className="inventory-detail-grid">
+          <div>
+            <dt>Reported by</dt>
+            <dd>Number One · Nomad</dd>
+          </div>
+          <div>
+            <dt>Downloaded or created by</dt>
+            <dd>Unknown · not recorded</dd>
+          </div>
           <div>
             <dt>Readiness</dt>
             <dd>Not evaluated</dd>
@@ -150,6 +167,7 @@ function InventoryRecord({ record }: { record: RecordItem }) {
   );
 }
 export function InventoryPanel({ active }: { active: boolean }) {
+  const [group, setGroup] = useState<InventoryGroup>("media");
   const [status, setStatus] = useState<InventoryStatus | null>(null),
     [query, setQuery] = useState(""),
     [draft, setDraft] = useState("");
@@ -169,7 +187,7 @@ export function InventoryPanel({ active }: { active: boolean }) {
     setData(null);
     api
       .inventory(
-        { episodeNumber: 127, status, query, after: cursor },
+        { episodeNumber: 127, group, status, query, after: cursor },
         controller.signal,
       )
       .then((result) => {
@@ -187,13 +205,14 @@ export function InventoryPanel({ active }: { active: boolean }) {
           setLoading(false);
       });
     return () => controller.abort();
-  }, [active, status, query, cursor, revision]);
+  }, [active, group, status, query, cursor, revision]);
   function resetPage() {
     setCursor(null);
     setPrevious([]);
   }
   function filter(next: InventoryStatus | null) {
     setStatus(next);
+    setGroup("all");
     resetPage();
   }
   const count = data?.summary.totalItems;
@@ -205,11 +224,9 @@ export function InventoryPanel({ active }: { active: boolean }) {
         <div>
           <p className="eyebrow copper">NUMBER ONE / SOURCE INVENTORY</p>
           <h1 id="inventory-title">
-            Collected, not yet curated<span className="heading-dot">.</span>
+            Reported by Number One<span className="heading-dot">.</span>
           </h1>
-          <p className="subtitle">
-            A read-only record of what the producer observed.
-          </p>
+          <p className="subtitle">Nomad · TWiB 127 inventory report</p>
         </div>
         <span className="inventory-readonly">
           <ShieldCheck size={15} />
@@ -222,7 +239,7 @@ export function InventoryPanel({ active }: { active: boolean }) {
           <option value="127">TWiB 127 · registered pilot</option>
         </select>
         <span className="inventory-source">
-          Source <code>nomad:number-one</code>
+          Reporter <code>nomad:number-one</code>
         </span>
         <button
           className="quiet"
@@ -241,9 +258,9 @@ export function InventoryPanel({ active }: { active: boolean }) {
         <div>
           <strong>Inventory is separate from your episode slate</strong>
           <p>
-            These records do not establish playable media or editorial
-            readiness. The inventory episode is selected independently from your
-            curated workspace.
+            Number One reported files and records observed on Nomad. This report
+            does not identify who downloaded or created each file. Playable
+            media and editorial readiness have not been evaluated.
           </p>
         </div>
       </div>
@@ -274,8 +291,10 @@ export function InventoryPanel({ active }: { active: boolean }) {
           ].map((value) => (
             <button
               key={value ?? "all"}
-              aria-pressed={status === value}
-              className={`inventory-count ${status === value ? "selected" : ""} ${value ?? "all"}`}
+              aria-pressed={
+                status === value && (value !== null || group === "all")
+              }
+              className={`inventory-count ${status === value && (value !== null || group === "all") ? "selected" : ""} ${value ?? "all"}`}
               onClick={() => filter(value as InventoryStatus | null)}
             >
               <span>
@@ -331,6 +350,60 @@ export function InventoryPanel({ active }: { active: boolean }) {
             <small>Producer clock · not a live heartbeat</small>
           </div>
         </div>
+        <div
+          className="inventory-groups"
+          role="group"
+          aria-label="Inventory groups"
+        >
+          {(
+            [
+              ["media", "Media files", data?.summary.groupCounts.media],
+              [
+                "attention",
+                "Needs review",
+                data?.summary.groupCounts.attention,
+              ],
+              [
+                "research",
+                "Research candidates",
+                data?.summary.groupCounts.research,
+              ],
+              ["all", "All inventory", count],
+            ] as const
+          ).map(([value, label, total]) => (
+            <button
+              key={value}
+              aria-pressed={group === value}
+              onClick={() => {
+                setGroup(value);
+                setStatus(null);
+                resetPage();
+              }}
+            >
+              {label} <strong>{total ?? "—"}</strong>
+            </button>
+          ))}
+        </div>
+        <p className="inventory-group-note" role="note">
+          {group === "media"
+            ? `${data?.summary.groupCounts.attention ?? "—"} records need review; ${data?.summary.groupCounts.research ?? "—"} research candidates are separate. All ${count ?? "—"} records remain available.`
+            : group === "research"
+              ? "Candidate identities only. These records do not establish a downloaded media file."
+              : group === "attention"
+                ? "Incomplete, quarantined, failed, missing, unverified and ambiguous records are retained here for review."
+                : "All retained records are available across pages."}{" "}
+          Media files have reported capture evidence and a recognized
+          audio/video filename. Playback and codecs have not been verified. MP4
+          is preferred for video; existing WebM files remain visible with a
+          conversion flag.
+          {group === "attention" && (
+            <span className="inventory-retry-note">
+              {" "}
+              Re-download requests are not connected yet. Nothing on this page
+              retries or deletes a file.
+            </span>
+          )}
+        </p>
         <form
           className="inventory-toolbar"
           onSubmit={(event) => {
@@ -373,7 +446,8 @@ export function InventoryPanel({ active }: { active: boolean }) {
               onClick={() => {
                 setDraft("");
                 setQuery("");
-                filter(null);
+                setStatus(null);
+                resetPage();
               }}
             >
               Clear filters
@@ -421,7 +495,9 @@ export function InventoryPanel({ active }: { active: boolean }) {
               <Archive size={30} />
               <h2>
                 {count
-                  ? "No matching records"
+                  ? !query && !status && group !== "all"
+                    ? `No ${group === "media" ? "media files" : group === "research" ? "research candidates" : "records needing review"} in this group`
+                    : "No matching records"
                   : latest
                     ? "No inventory records"
                     : "No inventory received"}

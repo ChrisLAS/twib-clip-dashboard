@@ -163,6 +163,7 @@ export default {
             url.searchParams.get("after"),
             {
               episodeNumber: selection.episodeNumber,
+              group: url.searchParams.get("group"),
               status: url.searchParams.get("status"),
               query: url.searchParams.get("q"),
               ingestionEnabled: env.INVENTORY_INGEST_ENABLED === "true",

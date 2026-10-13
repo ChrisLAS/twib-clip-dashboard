@@ -1,4 +1,8 @@
-import type { InventoryResponse, InventoryStatus } from "@twib/shared";
+import type {
+  InventoryResponse,
+  InventoryStatus,
+  InventoryGroup,
+} from "@twib/shared";
 import type {
   ApiError,
   CatalogStatus,
@@ -50,6 +54,7 @@ export const api = {
   inventory: (
     input: {
       episodeNumber: number;
+      group: InventoryGroup;
       status: InventoryStatus | null;
       query: string;
       after: string | null;
@@ -59,6 +64,7 @@ export const api = {
     const params = new URLSearchParams({
       episodeNumber: String(input.episodeNumber),
     });
+    params.set("group", input.group);
     if (input.status) params.set("status", input.status);
     if (input.query) params.set("q", input.query);
     if (input.after) params.set("after", input.after);

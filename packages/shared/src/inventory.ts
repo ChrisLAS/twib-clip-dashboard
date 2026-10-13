@@ -10,6 +10,13 @@ export const INVENTORY_STATUSES = [
   "quarantined",
 ] as const;
 export type InventoryStatus = (typeof INVENTORY_STATUSES)[number];
+export const INVENTORY_GROUPS = [
+  "all",
+  "media",
+  "research",
+  "attention",
+] as const;
+export type InventoryGroup = (typeof INVENTORY_GROUPS)[number];
 
 export interface InventorySourceItem {
   id: string;
@@ -86,11 +93,16 @@ export interface InventoryResponse {
   ingestion: "disabled" | "enabled";
   ingestionPaused: boolean;
   identityCaveat: string;
-  filters: { status: InventoryStatus | null; query: string };
+  filters: {
+    group: InventoryGroup;
+    status: InventoryStatus | null;
+    query: string;
+  };
   summary: {
     totalItems: number;
     matchedItems: number;
     statusCounts: Record<InventoryStatus, number>;
+    groupCounts: Record<InventoryGroup, number>;
   };
   // Receipt arrival time and source clock time have different meanings.
   latestReceivedAt: string | null;
