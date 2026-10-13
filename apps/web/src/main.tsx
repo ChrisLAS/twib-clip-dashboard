@@ -1,3 +1,5 @@
+import { InventoryPanel } from "./inventory-panel";
+import { inventoryView, inventoryViewUrl } from "./inventory-format";
 import { PublicationPanel } from "./publication-panel";
 import { EditorialPanel } from "./editorial-panel";
 import { AiringPanel } from "./airing-panel";
@@ -16,6 +18,7 @@ import {
   Film,
   Headphones,
   LayoutList,
+  Archive,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -63,6 +66,18 @@ const isLocalDemo =
   new URLSearchParams(location.search).get("demo") === "1" &&
   ["localhost", "127.0.0.1"].includes(location.hostname);
 function App() {
+  const [workspaceView, setWorkspaceView] = useState(() =>
+    inventoryView(location.href),
+  );
+  function changeWorkspace(view: "slate" | "inventory") {
+    if (selectedRef.current || mutationLock.current) return;
+    setWorkspaceView(view);
+    history.pushState(
+      { episodeId: episodeIdRef.current },
+      "",
+      inventoryViewUrl(location.href, view),
+    );
+  }
   const [episode, setEpisode] = useState<EpisodeDetail | null>(null),
     [session, setSession] = useState<Session | null>(null),
     [loading, setLoading] = useState(true),
@@ -319,6 +334,7 @@ function App() {
           );
         return;
       }
+      setWorkspaceView(inventoryView(location.href));
       cancelLoad();
       openingRender.current = null;
       openingHistory.current = null;
@@ -367,6 +383,7 @@ function App() {
   }, []);
   function open(clip: Clip) {
     if (mutationLock.current) return;
+    setWorkspaceView("slate");
     openingRender.current = null;
     openingHistory.current = null;
     cancelLoad();
@@ -380,7 +397,11 @@ function App() {
     history.pushState(
       { episodeId: clip.episodeId, clipId: clip.id, renderId: clip.render.id },
       "",
-      episodeUrl(location.href, clip.episodeId, clip.id),
+      episodeUrl(
+        new URL(inventoryViewUrl(location.href, "slate"), location.origin).href,
+        clip.episodeId,
+        clip.id,
+      ),
     );
     window.scrollTo(0, 0);
   }
@@ -612,11 +633,27 @@ function App() {
         <aside className="rail">
           <div>
             <p className="eyebrow">WORKSPACE</p>
-            <button className="nav active" onClick={back}>
+            <button
+              className={`nav ${workspaceView === "slate" ? "active" : ""}`}
+              aria-current={workspaceView === "slate" ? "page" : undefined}
+              onClick={() => changeWorkspace("slate")}
+            >
               <LayoutList size={17} />
               Episode slate
             </button>
-            <p className="eyebrow space-top">CURRENT EPISODE</p>
+            <button
+              className={`nav ${workspaceView === "inventory" ? "active" : ""}`}
+              aria-current={workspaceView === "inventory" ? "page" : undefined}
+              onClick={() => changeWorkspace("inventory")}
+            >
+              <Archive size={17} />
+              Source inventory
+            </button>
+            <p className="eyebrow space-top">
+              {workspaceView === "inventory"
+                ? "CURATED WORKSPACE"
+                : "CURRENT EPISODE"}
+            </p>
             <div className="episode-nav">
               <span>{episode?.number ?? "—"}</span>
               <small>{episode?.title ?? "Review workspace"}</small>
@@ -629,7 +666,25 @@ function App() {
         </aside>
       )}
       <main className={clip ? "review-main" : "slate-main"}>
-        {!clip && episodes.length > 0 && (
+        {!clip && (
+          <nav className="workspace-mobile-nav" aria-label="Workspace">
+            <button
+              aria-current={workspaceView === "slate" ? "page" : undefined}
+              onClick={() => changeWorkspace("slate")}
+            >
+              <LayoutList size={16} />
+              Episode slate
+            </button>
+            <button
+              aria-current={workspaceView === "inventory" ? "page" : undefined}
+              onClick={() => changeWorkspace("inventory")}
+            >
+              <Archive size={16} />
+              Source inventory
+            </button>
+          </nav>
+        )}
+        {!clip && workspaceView !== "inventory" && episodes.length > 0 && (
           <div className="workspace-picker">
             <label htmlFor="episode-picker">Episode</label>
             <select
@@ -655,571 +710,598 @@ function App() {
             </span>
           </div>
         )}
-        {!demo && session && (
-          <>
-            <CatalogSyncNotice
-              key={episodeId ?? "empty"}
-              episode={episode}
-              intakeVersion={intakeVersion}
-              reviewing={!!clip}
-              loading={loading}
-              pending={pending}
-              onApply={() => void load()}
-              onCancel={() => {
-                openingRender.current = null;
-                openingHistory.current = null;
-                cancelLoad();
-              }}
-              onBack={back}
-            />
-            <details className="sync-troubleshooting" hidden={!!clip}>
-              <summary>Troubleshooting</summary>
-              <p>
-                Automatic sync checks the server-configured catalog. Use a
-                manual import only to troubleshoot a delayed sync.
-              </p>
-              <ImportControl
-                csrf={session.csrfToken}
-                ready={
-                  session.integrations.drive && session.integrations.producer
-                }
-                hidden={!!clip}
-                hasClips={!!episode?.clips.length}
-                slateRevision={slateRevision}
-                onRefresh={() => void load()}
-                refreshDisabled={pending || loading}
-              />
-            </details>
-          </>
-        )}
-        {demo && (
-          <div className="demo-strip">
-            <span>Demo workspace</span>Fictional sample metadata.{" "}
-            {isLocalDemo
-              ? "Decisions stay in this tab and reset on reload."
-              : "Decisions are stored only in the local demo database."}{" "}
-            Drive playback and producer updates are not connected.
+        {!clip && workspaceView === "inventory" && !session && !demo && (
+          <div
+            className={error ? "error-banner" : "loading"}
+            role={error ? "alert" : "status"}
+          >
+            {error ? (
+              <>
+                <span>Owner session could not be loaded. {error}</span>
+                <button onClick={() => void load()}>Retry owner session</button>
+              </>
+            ) : (
+              "Loading owner workspace…"
+            )}
           </div>
         )}
-        {error && (
-          <div className="error-banner" role="alert">
-            <TriangleAlert size={20} />
-            <div>
-              <strong>
-                {episode
-                  ? "Refresh failed. Showing previously loaded data."
-                  : "Could not load this workspace"}
-              </strong>
-              <p>{error}</p>
-            </div>
-            <button
-              onClick={() => void load()}
-              disabled={loading || pending || !!clip}
-            >
-              Try again
-            </button>
-            {!episode &&
-              ["localhost", "127.0.0.1"].includes(location.hostname) && (
-                <a className="button" href="?demo=1">
-                  Open local demo
-                </a>
-              )}
-          </div>
-        )}
-        {loading && !episode ? (
-          <div className="loading" role="status">
-            <RefreshCw className="spin" />
-            Loading your review slate…
-          </div>
-        ) : !episode && !error ? (
-          <div className="empty">
-            <Film />
-            <h1>
-              {episodes.length ? "Episode not loaded" : "No episodes yet"}
-            </h1>
-            <p>
-              Clips will appear after an authorized producer manifest is
-              imported.
-            </p>
-            <button onClick={() => void load()} disabled={loading || pending}>
-              Refresh
-            </button>
-          </div>
-        ) : (
-          episode && (
+        <InventoryPanel
+          active={
+            !clip && workspaceView === "inventory" && (!!session || !!demo)
+          }
+        />
+        <div hidden={!clip && workspaceView === "inventory"}>
+          {!demo && session && (
             <>
-              {!clip && (
-                <PublicationPanel
-                  csrf={session?.csrfToken ?? ""}
-                  demo={!!demo}
-                />
-              )}
-              <EditorialPanel
-                key={`editorial-${episode.id}-${clip?.render.id ?? "slate"}`}
-                csrf={session?.csrfToken ?? ""}
-                episodeId={episode.id}
-                renderId={clip?.render.id}
-                demo={!!demo}
+              <CatalogSyncNotice
+                key={episodeId ?? "empty"}
+                episode={episode}
+                intakeVersion={intakeVersion}
+                reviewing={!!clip}
+                loading={loading}
+                pending={pending}
+                onApply={() => void load()}
+                onCancel={() => {
+                  openingRender.current = null;
+                  openingHistory.current = null;
+                  cancelLoad();
+                }}
+                onBack={back}
               />
-              {clip && (
-                <AiringPanel
-                  key={`airing-${clip.render.id}`}
-                  csrf={session?.csrfToken ?? ""}
-                  renderId={clip.render.id}
-                  episodes={episodes}
-                  demo={!!demo}
-                />
-              )}
-              {clip ? (
-                <ReviewDesk
-                  key={clip.render.id}
-                  initialDraft={
-                    drafts.current.get(clip.render.id) ??
-                    readDraft(clip.render.id)
+              <details className="sync-troubleshooting" hidden={!!clip}>
+                <summary>Troubleshooting</summary>
+                <p>
+                  Automatic sync checks the server-configured catalog. Use a
+                  manual import only to troubleshoot a delayed sync.
+                </p>
+                <ImportControl
+                  csrf={session.csrfToken}
+                  ready={
+                    session.integrations.drive && session.integrations.producer
                   }
-                  onDraft={(note, reason) => {
-                    drafts.current.set(clip.render.id, { note, reason });
-                    storeDraft(
-                      clip.render.id,
-                      note === clip.render.review.note &&
-                        reason === clip.render.review.reason
-                        ? undefined
-                        : { note, reason },
-                    );
-                  }}
-                  clip={clip}
-                  demo={!!demo}
-                  pending={pending}
-                  shortcuts={shortcuts}
-                  onBack={back}
-                  onDecide={decide}
-                  onVisibility={visibility}
-                  index={episode.clips.indexOf(clip)}
-                  episodeNumber={episode.number}
-                  total={episode.clips.length}
-                  onNext={(delta) => {
-                    const list = episode.clips;
-                    const next = list[list.indexOf(clip) + delta];
-                    if (next) open(next);
-                  }}
+                  hidden={!!clip}
+                  hasClips={!!episode?.clips.length}
+                  slateRevision={slateRevision}
+                  onRefresh={() => void load()}
+                  refreshDisabled={pending || loading}
                 />
-              ) : (
-                <>
-                  <div className="episode-heading">
-                    <div>
-                      <p className="eyebrow copper">THIS WEEK IN BITCOIN</p>
-                      <h1>
-                        Episode {episode.number}
-                        <span className="heading-dot">.</span>
-                      </h1>
-                      <p className="subtitle">
-                        {episode.title}
-                        <span className="muted"> / Review slate</span>
-                      </p>
-                    </div>
-                    <div className="header-state">
-                      <span className="pill amber">
-                        <Radio size={13} />
-                        Aired outcome unverified
-                      </span>
-                      <button
-                        className="quiet"
-                        onClick={() => void load()}
-                        disabled={loading || pending}
-                      >
-                        <RefreshCw
-                          size={14}
-                          className={loading ? "spin" : ""}
-                        />
-                        {loading ? "Refreshing…" : "Refresh slate"}
-                      </button>
-                      {demo && loading && (
-                        <button className="quiet" onClick={cancelLoad}>
-                          Cancel refresh
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {demo && (
-                    <section className="direction">
-                      <div className="direction-mark">↗</div>
-                      <div>
-                        <p className="eyebrow copper">
-                          EDITORIAL DIRECTION{" "}
-                          <span>· SUGGESTED, NOT APPROVED</span>
-                        </p>
-                        <p>
-                          Build a clear throughline. Give every clip a distinct
-                          job.
-                        </p>
-                        <small>
-                          A fictional editorial prompt. Listen for a complete
-                          thought, useful context, and a distinct angle.
-                        </small>
-                      </div>
-                    </section>
-                  )}
-                  <section className="metrics" aria-label="Episode summary">
-                    <div>
-                      <strong>{episode.clips.length}</strong>
-                      <span>imported renders</span>
-                    </div>
-                    <div>
-                      <strong>
-                        {duration(
-                          episode.clips.reduce(
-                            (n, c) => n + c.render.durationMs,
-                            0,
-                          ),
-                        )}
-                      </strong>
-                      <span>combined runtime</span>
-                    </div>
-                    <div>
-                      <strong>
-                        {
-                          episode.clips.filter(
-                            (c) => c.render.review.decision === "up",
-                          ).length
-                        }
-                        <small> / {episode.clips.length}</small>
-                      </strong>
-                      <span>editorially approved</span>
-                    </div>
-                    <div>
-                      <strong>
-                        {pendingIntakes(intakes, episode.id).length}
-                      </strong>
-                      <span>pending intake</span>
-                    </div>
-                    <div>
-                      <strong>
-                        {
-                          episode.clips.filter(
-                            (item) =>
-                              item.production.state === "ready" &&
-                              !item.production.blocker &&
-                              !item.production.stale &&
-                              item.render.mediaAvailable,
-                          ).length
-                        }
-                      </strong>
-                      <span>ready for review</span>
-                    </div>
-                    <div className="last-update">
-                      <Clock3 size={18} />
-                      <span>
-                        <b>
-                          {episode.sync.lastSuccessAt
-                            ? `Last import ${date(episode.sync.lastSuccessAt)}`
-                            : "No verified producer update"}
-                        </b>
-                        <small>
-                          {episode.sync.lastSuccessAt
-                            ? "Latest applied slate · new updates appear above"
-                            : demo
-                              ? "No live integration · producer status unknown"
-                              : "Waiting for a successful catalog sync"}
-                        </small>
-                      </span>
-                    </div>
-                  </section>
-                  <ManualIntakePanel
-                    episodes={episodes}
-                    episodeId={episode.id}
-                    items={intakes}
+              </details>
+            </>
+          )}
+          {demo && (
+            <div className="demo-strip">
+              <span>Demo workspace</span>Fictional sample metadata.{" "}
+              {isLocalDemo
+                ? "Decisions stay in this tab and reset on reload."
+                : "Decisions are stored only in the local demo database."}{" "}
+              Drive playback and producer updates are not connected.
+            </div>
+          )}
+          {error && (
+            <div className="error-banner" role="alert">
+              <TriangleAlert size={20} />
+              <div>
+                <strong>
+                  {episode
+                    ? "Refresh failed. Showing previously loaded data."
+                    : "Could not load this workspace"}
+                </strong>
+                <p>{error}</p>
+              </div>
+              <button
+                onClick={() => void load()}
+                disabled={loading || pending || !!clip}
+              >
+                Try again
+              </button>
+              {!episode &&
+                ["localhost", "127.0.0.1"].includes(location.hostname) && (
+                  <a className="button" href="?demo=1">
+                    Open local demo
+                  </a>
+                )}
+            </div>
+          )}
+          {loading && !episode ? (
+            <div className="loading" role="status">
+              <RefreshCw className="spin" />
+              Loading your review slate…
+            </div>
+          ) : !episode && !error ? (
+            <div className="empty">
+              <Film />
+              <h1>
+                {episodes.length ? "Episode not loaded" : "No episodes yet"}
+              </h1>
+              <p>
+                Clips will appear after an authorized producer manifest is
+                imported.
+              </p>
+              <button onClick={() => void load()} disabled={loading || pending}>
+                Refresh
+              </button>
+            </div>
+          ) : (
+            episode && (
+              <>
+                {!clip && (
+                  <PublicationPanel
                     csrf={session?.csrfToken ?? ""}
                     demo={!!demo}
-                    hidden={false}
-                    disabled={pending}
-                    onBusy={(busy) => {
-                      if (busy) cancelLoad();
-                      mutationLock.current = busy;
-                      setPending(busy);
-                    }}
-                    onSaved={intakeSaved}
-                    onOpenRender={openExistingRender}
                   />
-                  <div
-                    className="tabs"
-                    role="group"
-                    aria-label="Filter by decision"
-                  >
-                    {[
-                      "All clips",
-                      "Unreviewed",
-                      "Approved",
-                      "Rejected",
-                      "Deferred",
-                      "Hidden",
-                    ].map((t) => (
-                      <button
-                        key={t}
-                        aria-pressed={filter === t}
-                        className={filter === t ? "selected" : ""}
-                        onClick={() => setFilter(t)}
-                      >
-                        {t}
-                        {t === "All clips" && (
-                          <span>
-                            {
-                              episode.clips.filter(
-                                (c) => c.visibility === "visible",
-                              ).length
-                            }
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="toolbar">
-                    <label className="search">
-                      <Search size={17} />
-                      <input
-                        value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Search clips, speakers or sources"
-                        aria-label="Search clips, speakers or sources"
-                      />
-                      {query && (
+                )}
+                <EditorialPanel
+                  key={`editorial-${episode.id}-${clip?.render.id ?? "slate"}`}
+                  csrf={session?.csrfToken ?? ""}
+                  episodeId={episode.id}
+                  renderId={clip?.render.id}
+                  demo={!!demo}
+                />
+                {clip && (
+                  <AiringPanel
+                    key={`airing-${clip.render.id}`}
+                    csrf={session?.csrfToken ?? ""}
+                    renderId={clip.render.id}
+                    episodes={episodes}
+                    demo={!!demo}
+                  />
+                )}
+                {clip ? (
+                  <ReviewDesk
+                    key={clip.render.id}
+                    initialDraft={
+                      drafts.current.get(clip.render.id) ??
+                      readDraft(clip.render.id)
+                    }
+                    onDraft={(note, reason) => {
+                      drafts.current.set(clip.render.id, { note, reason });
+                      storeDraft(
+                        clip.render.id,
+                        note === clip.render.review.note &&
+                          reason === clip.render.review.reason
+                          ? undefined
+                          : { note, reason },
+                      );
+                    }}
+                    clip={clip}
+                    demo={!!demo}
+                    pending={pending}
+                    shortcuts={shortcuts}
+                    onBack={back}
+                    onDecide={decide}
+                    onVisibility={visibility}
+                    index={episode.clips.indexOf(clip)}
+                    episodeNumber={episode.number}
+                    total={episode.clips.length}
+                    onNext={(delta) => {
+                      const list = episode.clips;
+                      const next = list[list.indexOf(clip) + delta];
+                      if (next) open(next);
+                    }}
+                  />
+                ) : (
+                  <>
+                    <div className="episode-heading">
+                      <div>
+                        <p className="eyebrow copper">THIS WEEK IN BITCOIN</p>
+                        <h1>
+                          Episode {episode.number}
+                          <span className="heading-dot">.</span>
+                        </h1>
+                        <p className="subtitle">
+                          {episode.title}
+                          <span className="muted"> / Review slate</span>
+                        </p>
+                      </div>
+                      <div className="header-state">
+                        <span className="pill amber">
+                          <Radio size={13} />
+                          Aired outcome unverified
+                        </span>
                         <button
-                          aria-label="Clear search"
-                          onClick={() => setQuery("")}
+                          className="quiet"
+                          onClick={() => void load()}
+                          disabled={loading || pending}
                         >
-                          <X size={16} />
+                          <RefreshCw
+                            size={14}
+                            className={loading ? "spin" : ""}
+                          />
+                          {loading ? "Refreshing…" : "Refresh slate"}
                         </button>
-                      )}
-                    </label>
-                    <label className="sort">
-                      Sort by
-                      <select
-                        value={sort}
-                        onChange={(e) => setSort(e.target.value)}
-                      >
-                        <option value="order">Episode order</option>
-                        <option value="duration">Shortest first</option>
-                        <option value="speaker">Speaker A–Z</option>
-                      </select>
-                    </label>
-                    <span className="result-count">{visible.length} clips</span>
-                  </div>
-                  <div className="clip-list">
-                    <div className="list-head">
-                      <span>CLIP / SOURCE</span>
-                      <span>DURATION</span>
-                      <span>SOURCE DATE</span>
-                      <span>PRODUCTION / QA</span>
-                      <span>DECISION</span>
+                        {demo && loading && (
+                          <button className="quiet" onClick={cancelLoad}>
+                            Cancel refresh
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    {visible.map((c, i) => (
-                      <button
-                        key={c.id}
-                        className="clip-row"
-                        onClick={() => open(c)}
-                        aria-label={`Review ${c.title} by ${c.render.source.speaker}`}
-                      >
-                        <div className="clip-identity">
-                          <span className="row-number">
-                            {String(i + 1).padStart(2, "0")}
-                          </span>
-                          {demo ? (
-                            <img src={thumbnail(c)} alt="" />
-                          ) : (
-                            <ClipThumbnail
-                              key={`${c.render.id}:${slateRevision}`}
-                              renderId={c.render.id}
-                              available={c.render.mediaAvailable}
-                            />
+                    {demo && (
+                      <section className="direction">
+                        <div className="direction-mark">↗</div>
+                        <div>
+                          <p className="eyebrow copper">
+                            EDITORIAL DIRECTION{" "}
+                            <span>· SUGGESTED, NOT APPROVED</span>
+                          </p>
+                          <p>
+                            Build a clear throughline. Give every clip a
+                            distinct job.
+                          </p>
+                          <small>
+                            A fictional editorial prompt. Listen for a complete
+                            thought, useful context, and a distinct angle.
+                          </small>
+                        </div>
+                      </section>
+                    )}
+                    <section className="metrics" aria-label="Episode summary">
+                      <div>
+                        <strong>{episode.clips.length}</strong>
+                        <span>imported renders</span>
+                      </div>
+                      <div>
+                        <strong>
+                          {duration(
+                            episode.clips.reduce(
+                              (n, c) => n + c.render.durationMs,
+                              0,
+                            ),
                           )}
-                          <div>
-                            <strong>{c.render.source.speaker}</strong>
-                            <span>{c.title}</span>
-                            <small>{c.render.source.title}</small>
-                          </div>
-                        </div>
-                        <div className="duration">
-                          {duration(c.render.durationMs)}
-                        </div>
-                        <div className="source-date">
-                          <span>
-                            Published {date(c.render.source.publicationDate)}
-                          </span>
+                        </strong>
+                        <span>combined runtime</span>
+                      </div>
+                      <div>
+                        <strong>
+                          {
+                            episode.clips.filter(
+                              (c) => c.render.review.decision === "up",
+                            ).length
+                          }
+                          <small> / {episode.clips.length}</small>
+                        </strong>
+                        <span>editorially approved</span>
+                      </div>
+                      <div>
+                        <strong>
+                          {pendingIntakes(intakes, episode.id).length}
+                        </strong>
+                        <span>pending intake</span>
+                      </div>
+                      <div>
+                        <strong>
+                          {
+                            episode.clips.filter(
+                              (item) =>
+                                item.production.state === "ready" &&
+                                !item.production.blocker &&
+                                !item.production.stale &&
+                                item.render.mediaAvailable,
+                            ).length
+                          }
+                        </strong>
+                        <span>ready for review</span>
+                      </div>
+                      <div className="last-update">
+                        <Clock3 size={18} />
+                        <span>
+                          <b>
+                            {episode.sync.lastSuccessAt
+                              ? `Last import ${date(episode.sync.lastSuccessAt)}`
+                              : "No verified producer update"}
+                          </b>
                           <small>
-                            {c.render.source.recordingDate
-                              ? `Recorded ${date(c.render.source.recordingDate)}`
-                              : "Recorded date unknown"}
+                            {episode.sync.lastSuccessAt
+                              ? "Latest applied slate · new updates appear above"
+                              : demo
+                                ? "No live integration · producer status unknown"
+                                : "Waiting for a successful catalog sync"}
                           </small>
-                        </div>
-                        <div className="production">
-                          <span className="pill">
-                            <span className="status-dot" />
-                            {productionLabel(c.production)}
-                          </span>
-                          <small>
-                            {c.render.qa.some((q) => q.result === "unknown")
-                              ? "Playback check pending"
-                              : "See QA evidence"}
-                          </small>
-                          <small className="last-progress">
-                            Last progress:{" "}
-                            {c.production.lastProgressAt
-                              ? new Date(
-                                  c.production.lastProgressAt,
-                                ).toLocaleString()
-                              : "unknown"}
-                          </small>
-                        </div>
-                        <div className={`decision ${c.render.review.decision}`}>
-                          <span>{labels[c.render.review.decision]}</span>
-                          <ChevronRight size={17} />
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                  {!visible.length && (
-                    <div className="empty">
-                      <Search />
-                      <h2>
-                        {episode.clips.length
-                          ? "No clips match this view"
-                          : "No reviewable clips yet"}
-                      </h2>
-                      <p>
-                        {episode.clips.length
-                          ? "Try another search or clear your filters."
-                          : "Saved manual submissions appear above. Reviewable clips will appear here after a verified render is imported."}
-                      </p>
-                      <button
-                        onClick={() => {
-                          setFilter("All clips");
-                          setQuery("");
-                        }}
-                      >
-                        Clear filters
-                      </button>
+                        </span>
+                      </div>
+                    </section>
+                    <ManualIntakePanel
+                      episodes={episodes}
+                      episodeId={episode.id}
+                      items={intakes}
+                      csrf={session?.csrfToken ?? ""}
+                      demo={!!demo}
+                      hidden={false}
+                      disabled={pending}
+                      onBusy={(busy) => {
+                        if (busy) cancelLoad();
+                        mutationLock.current = busy;
+                        setPending(busy);
+                      }}
+                      onSaved={intakeSaved}
+                      onOpenRender={openExistingRender}
+                    />
+                    <div
+                      className="tabs"
+                      role="group"
+                      aria-label="Filter by decision"
+                    >
+                      {[
+                        "All clips",
+                        "Unreviewed",
+                        "Approved",
+                        "Rejected",
+                        "Deferred",
+                        "Hidden",
+                      ].map((t) => (
+                        <button
+                          key={t}
+                          aria-pressed={filter === t}
+                          className={filter === t ? "selected" : ""}
+                          onClick={() => setFilter(t)}
+                        >
+                          {t}
+                          {t === "All clips" && (
+                            <span>
+                              {
+                                episode.clips.filter(
+                                  (c) => c.visibility === "visible",
+                                ).length
+                              }
+                            </span>
+                          )}
+                        </button>
+                      ))}
                     </div>
-                  )}
-                  {episode.clips
-                    .filter((c) => c.production.blocker)
-                    .map((c) => (
-                      <section className="blocker" key={c.id}>
+                    <div className="toolbar">
+                      <label className="search">
+                        <Search size={17} />
+                        <input
+                          value={query}
+                          onChange={(e) => setQuery(e.target.value)}
+                          placeholder="Search clips, speakers or sources"
+                          aria-label="Search clips, speakers or sources"
+                        />
+                        {query && (
+                          <button
+                            aria-label="Clear search"
+                            onClick={() => setQuery("")}
+                          >
+                            <X size={16} />
+                          </button>
+                        )}
+                      </label>
+                      <label className="sort">
+                        Sort by
+                        <select
+                          value={sort}
+                          onChange={(e) => setSort(e.target.value)}
+                        >
+                          <option value="order">Episode order</option>
+                          <option value="duration">Shortest first</option>
+                          <option value="speaker">Speaker A–Z</option>
+                        </select>
+                      </label>
+                      <span className="result-count">
+                        {visible.length} clips
+                      </span>
+                    </div>
+                    <div className="clip-list">
+                      <div className="list-head">
+                        <span>CLIP / SOURCE</span>
+                        <span>DURATION</span>
+                        <span>SOURCE DATE</span>
+                        <span>PRODUCTION / QA</span>
+                        <span>DECISION</span>
+                      </div>
+                      {visible.map((c, i) => (
+                        <button
+                          key={c.id}
+                          className="clip-row"
+                          onClick={() => open(c)}
+                          aria-label={`Review ${c.title} by ${c.render.source.speaker}`}
+                        >
+                          <div className="clip-identity">
+                            <span className="row-number">
+                              {String(i + 1).padStart(2, "0")}
+                            </span>
+                            {demo ? (
+                              <img src={thumbnail(c)} alt="" />
+                            ) : (
+                              <ClipThumbnail
+                                key={`${c.render.id}:${slateRevision}`}
+                                renderId={c.render.id}
+                                available={c.render.mediaAvailable}
+                              />
+                            )}
+                            <div>
+                              <strong>{c.render.source.speaker}</strong>
+                              <span>{c.title}</span>
+                              <small>{c.render.source.title}</small>
+                            </div>
+                          </div>
+                          <div className="duration">
+                            {duration(c.render.durationMs)}
+                          </div>
+                          <div className="source-date">
+                            <span>
+                              Published {date(c.render.source.publicationDate)}
+                            </span>
+                            <small>
+                              {c.render.source.recordingDate
+                                ? `Recorded ${date(c.render.source.recordingDate)}`
+                                : "Recorded date unknown"}
+                            </small>
+                          </div>
+                          <div className="production">
+                            <span className="pill">
+                              <span className="status-dot" />
+                              {productionLabel(c.production)}
+                            </span>
+                            <small>
+                              {c.render.qa.some((q) => q.result === "unknown")
+                                ? "Playback check pending"
+                                : "See QA evidence"}
+                            </small>
+                            <small className="last-progress">
+                              Last progress:{" "}
+                              {c.production.lastProgressAt
+                                ? new Date(
+                                    c.production.lastProgressAt,
+                                  ).toLocaleString()
+                                : "unknown"}
+                            </small>
+                          </div>
+                          <div
+                            className={`decision ${c.render.review.decision}`}
+                          >
+                            <span>{labels[c.render.review.decision]}</span>
+                            <ChevronRight size={17} />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                    {!visible.length && (
+                      <div className="empty">
+                        <Search />
+                        <h2>
+                          {episode.clips.length
+                            ? "No clips match this view"
+                            : "No reviewable clips yet"}
+                        </h2>
+                        <p>
+                          {episode.clips.length
+                            ? "Try another search or clear your filters."
+                            : "Saved manual submissions appear above. Reviewable clips will appear here after a verified render is imported."}
+                        </p>
+                        <button
+                          onClick={() => {
+                            setFilter("All clips");
+                            setQuery("");
+                          }}
+                        >
+                          Clear filters
+                        </button>
+                      </div>
+                    )}
+                    {episode.clips
+                      .filter((c) => c.production.blocker)
+                      .map((c) => (
+                        <section className="blocker" key={c.id}>
+                          <TriangleAlert size={20} />
+                          <div>
+                            <strong>{c.title} · production blocked</strong>
+                            <p>{c.production.blocker}</p>
+                            <p>
+                              Last actual progress:{" "}
+                              {c.production.lastProgressAt
+                                ? new Date(
+                                    c.production.lastProgressAt,
+                                  ).toLocaleString()
+                                : "Unknown"}
+                            </p>
+                          </div>
+                          <button onClick={() => open(c)}>
+                            Review details
+                            <ChevronRight size={15} />
+                          </button>
+                        </section>
+                      ))}
+                    {demo && (
+                      <section className="blocker">
                         <TriangleAlert size={20} />
                         <div>
-                          <strong>{c.title} · production blocked</strong>
-                          <p>{c.production.blocker}</p>
+                          <strong>Example sources need attention</strong>
                           <p>
-                            Last actual progress:{" "}
-                            {c.production.lastProgressAt
-                              ? new Date(
-                                  c.production.lastProgressAt,
-                                ).toLocaleString()
-                              : "Unknown"}
+                            Fictional blocker · awaiting authorized source
+                            access.
                           </p>
                         </div>
-                        <button onClick={() => open(c)}>
-                          Review details
+                        <button onClick={() => setBlockers(!blockers)}>
+                          {blockers ? "Close details" : "View blockers"}
                           <ChevronRight size={15} />
                         </button>
                       </section>
-                    ))}
-                  {demo && (
-                    <section className="blocker">
-                      <TriangleAlert size={20} />
-                      <div>
-                        <strong>Example sources need attention</strong>
+                    )}
+                    {blockers && demo && (
+                      <section className="blocker-details">
+                        <h3>Source retrieval is blocked</h3>
                         <p>
-                          Fictional blocker · awaiting authorized source access.
+                          This fictional example has no usable source artifact.
+                          In a connected workspace, the producer’s specific
+                          blocker and next action appear here. No live producer
+                          is connected.
                         </p>
-                      </div>
-                      <button onClick={() => setBlockers(!blockers)}>
-                        {blockers ? "Close details" : "View blockers"}
-                        <ChevronRight size={15} />
-                      </button>
-                    </section>
-                  )}
-                  {blockers && demo && (
-                    <section className="blocker-details">
-                      <h3>Source retrieval is blocked</h3>
-                      <p>
-                        This fictional example has no usable source artifact. In
-                        a connected workspace, the producer’s specific blocker
-                        and next action appear here. No live producer is
-                        connected.
-                      </p>
-                      <p className="muted">
-                        Last actual event: unknown. Refreshing the slate does
-                        not restart production.
-                      </p>
-                    </section>
-                  )}
-                  <footer>
-                    <span>
-                      <ShieldCheck size={13} />
-                      Private by design · originals stay in Drive
-                    </span>
-                    <span>Production ≠ approval ≠ airing</span>
-                  </footer>
-                </>
-              )}
-              {saveError && (
-                <div className="save-error" role="alert">
-                  <TriangleAlert size={18} />
-                  <span>{saveError}</span>
-                  <button
-                    disabled={pending || loading}
-                    onClick={clip ? back : () => void load()}
-                  >
-                    {clip ? "Back to slate to refresh" : "Refresh slate"}
-                  </button>
-                </div>
-              )}
-              {notice && (
-                <div className="toast" role="status">
-                  <Check size={18} />
-                  <span>{notice}</span>
-                  {undo && (
+                        <p className="muted">
+                          Last actual event: unknown. Refreshing the slate does
+                          not restart production.
+                        </p>
+                      </section>
+                    )}
+                    <footer>
+                      <span>
+                        <ShieldCheck size={13} />
+                        Private by design · originals stay in Drive
+                      </span>
+                      <span>Production ≠ approval ≠ airing</span>
+                    </footer>
+                  </>
+                )}
+                {saveError && (
+                  <div className="save-error" role="alert">
+                    <TriangleAlert size={18} />
+                    <span>{saveError}</span>
                     <button
-                      disabled={pending}
-                      onClick={() => {
-                        const c = episode.clips.find(
-                          (c) => c.id === undo.clipId,
-                        );
-                        if (
-                          c &&
-                          c.render.id === undo.renderId &&
-                          c.render.review.revision === undo.committedRevision
-                        )
-                          void decide(
-                            c,
-                            undo.review.decision,
-                            undo.review.note,
-                            undo.review.reason,
-                            true,
-                          );
-                        else {
-                          setUndo(null);
-                          setSaveError(
-                            "Undo is no longer available because this render or review changed. No decision was changed.",
-                          );
-                        }
-                      }}
+                      disabled={pending || loading}
+                      onClick={clip ? back : () => void load()}
                     >
-                      <Undo2 size={14} />
-                      Undo
+                      {clip ? "Back to slate to refresh" : "Refresh slate"}
                     </button>
-                  )}
-                  <button
-                    className="icon"
-                    aria-label="Dismiss notification"
-                    onClick={() => setNotice("")}
-                  >
-                    <X size={15} />
-                  </button>
-                </div>
-              )}
-            </>
-          )
-        )}
+                  </div>
+                )}
+                {notice && (
+                  <div className="toast" role="status">
+                    <Check size={18} />
+                    <span>{notice}</span>
+                    {undo && (
+                      <button
+                        disabled={pending}
+                        onClick={() => {
+                          const c = episode.clips.find(
+                            (c) => c.id === undo.clipId,
+                          );
+                          if (
+                            c &&
+                            c.render.id === undo.renderId &&
+                            c.render.review.revision === undo.committedRevision
+                          )
+                            void decide(
+                              c,
+                              undo.review.decision,
+                              undo.review.note,
+                              undo.review.reason,
+                              true,
+                            );
+                          else {
+                            setUndo(null);
+                            setSaveError(
+                              "Undo is no longer available because this render or review changed. No decision was changed.",
+                            );
+                          }
+                        }}
+                      >
+                        <Undo2 size={14} />
+                        Undo
+                      </button>
+                    )}
+                    <button
+                      className="icon"
+                      aria-label="Dismiss notification"
+                      onClick={() => setNotice("")}
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                )}
+              </>
+            )
+          )}
+        </div>
       </main>
       {help && (
         <div className="modal-backdrop" onClick={() => setHelp(false)}>

@@ -1,3 +1,4 @@
+export * from "./inventory";
 export * from "./render-transcripts";
 export * from "./airing";
 export * from "./editorial";

@@ -1,6 +1,14 @@
 import { HttpError } from "../errors";
 import {
+  INVENTORY_STATUSES,
+  INVENTORY_GROUPS,
+  type InventoryGroup,
+  type InventoryResponse,
+  type InventoryStatus,
+} from "../../../../packages/shared/src/inventory";
+import {
   INVENTORY_SOURCE,
+  inventoryEpisodeId,
   semanticHash,
   validateEnvelope,
   envelopeHash,
@@ -178,12 +186,106 @@ export function inventoryEpisodeParameter(value: string | null): string {
     );
   return value;
 }
+// The human-readable selector names the separately registered pilot scope. It
+// never infers an association with the current curated dashboard workspace.
+export async function inventoryEpisodeSelection(params: URLSearchParams) {
+  for (const name of [
+    "episodeId",
+    "episodeNumber",
+    "after",
+    "group",
+    "status",
+    "q",
+  ])
+    if (params.getAll(name).length > 1)
+      throw new HttpError(
+        422,
+        "INVENTORY_PARAMETER_INVALID",
+        "Inventory parameters must be supplied once.",
+      );
+  const rawNumber = params.get("episodeNumber");
+  const rawId = params.get("episodeId");
+  if (rawNumber === null)
+    return { episodeId: inventoryEpisodeParameter(rawId), episodeNumber: null };
+  if (!/^[1-9][0-9]{0,5}$/.test(rawNumber))
+    throw new HttpError(
+      422,
+      "INVENTORY_EPISODE_INVALID",
+      "Choose an exact inventory episode number.",
+    );
+  const episodeNumber = Number(rawNumber);
+  if (episodeNumber !== 127)
+    throw new HttpError(
+      404,
+      "INVENTORY_EPISODE_UNMAPPED",
+      "This episode has no registered inventory scope.",
+    );
+  const episodeId = await inventoryEpisodeId(episodeNumber);
+  if (rawId !== null && inventoryEpisodeParameter(rawId) !== episodeId)
+    throw new HttpError(
+      422,
+      "INVENTORY_EPISODE_MISMATCH",
+      "The inventory episode selectors do not match.",
+    );
+  return { episodeId, episodeNumber };
+}
+
+interface InventoryListOptions {
+  group?: string | null;
+  status?: string | null;
+  query?: string | null;
+  episodeNumber?: number | null;
+  ingestionEnabled?: boolean;
+}
+
+// The index seeks the greatest durable sequence for each retained identity.
+// Snapshot absence never removes an item, and source clocks never order it.
+const latestItemsSql = `
+  SELECT i.item_id,o.receipt_id,o.observed_ms,o.sequence,o.item_json
+  FROM inventory_items i JOIN inventory_observations o
+    ON o.source_id=i.source_id AND o.episode_id=i.episode_id AND o.item_id=i.item_id
+  WHERE i.source_id=? AND i.episode_id=? AND o.sequence=(
+    SELECT sequence FROM inventory_observations newest
+    WHERE newest.source_id=i.source_id AND newest.episode_id=i.episode_id
+      AND newest.item_id=i.item_id ORDER BY sequence DESC LIMIT 1
+  )`;
+
+// These are browsing groups, never playable/readiness assertions. Completed
+// WebM remains visible as media; incomplete suffixes and unknown formats need
+// attention. Candidates are research metadata rather than audio/video files.
+const groupedLatestItemsSql = `
+  SELECT retained.*,CASE
+    WHEN json_extract(retained.item_json,'$.kind')='media'
+      AND json_extract(retained.item_json,'$.processing_status')='captured_observed'
+      AND json_extract(retained.item_json,'$.media.present')=1
+      AND (substr(lower(coalesce(json_extract(retained.item_json,'$.media.ref'),'')),-4)
+        IN ('.mp4','.m4v','.mov','.mkv','.avi','.mp3','.m4a','.aac','.wav','.ogg')
+        OR substr(lower(coalesce(json_extract(retained.item_json,'$.media.ref'),'')),-5)
+        IN ('.webm','.flac','.opus','.aiff')) THEN 'media'
+    WHEN json_extract(retained.item_json,'$.kind')='candidate'
+      AND json_extract(retained.item_json,'$.processing_status')='candidate' THEN 'research'
+    ELSE 'attention' END item_group
+  FROM (${latestItemsSql}) retained`;
+
+// All values are bound. INSTR makes %, _ and SQL-shaped text literal searches,
+// and deliberately searches reference metadata rather than prose or origins.
+const matchesFilterSql = `
+  (filters.group_name='all' OR latest.item_group=filters.group_name)
+  AND (filters.status IS NULL OR json_extract(latest.item_json,'$.processing_status')=filters.status)
+  AND (filters.query='' OR instr(lower(latest.item_id),filters.query)>0
+    OR instr(lower(coalesce(json_extract(latest.item_json,'$.media.ref'),'')),filters.query)>0
+    OR EXISTS (SELECT 1 FROM json_each(latest.item_json,'$.observations') artifact
+      WHERE instr(lower(coalesce(json_extract(artifact.value,'$.artifact'),'')),filters.query)>0)
+    OR EXISTS (SELECT 1 FROM json_each(latest.item_json,'$.capture_evidence') evidence
+      WHERE instr(lower(coalesce(json_extract(evidence.value,'$.artifact'),'')),filters.query)>0))`;
+
 // Owner-authenticated read only. Never maps producer metadata into playable clips.
 export async function listInventory(
   db: D1Database,
   episode: string,
   after: string | null = null,
-) {
+  options: InventoryListOptions = {},
+): Promise<InventoryResponse> {
   inventoryEpisodeParameter(episode);
   if (after !== null && !/^item_[a-f0-9]{64}$/.test(after))
     throw new HttpError(
@@ -191,64 +293,147 @@ export async function listInventory(
       "INVENTORY_CURSOR_INVALID",
       "Invalid inventory cursor.",
     );
-  const identities = await db
+  const group = options.group ?? "all";
+  if (!INVENTORY_GROUPS.includes(group as InventoryGroup))
+    throw new HttpError(
+      422,
+      "INVENTORY_GROUP_INVALID",
+      "Choose a supported inventory group.",
+    );
+  const status = options.status ?? null;
+  if (
+    status !== null &&
+    !INVENTORY_STATUSES.includes(status as InventoryStatus)
+  )
+    throw new HttpError(
+      422,
+      "INVENTORY_STATUS_INVALID",
+      "Choose a supported inventory status.",
+    );
+  const rawQuery = options.query ?? "";
+  if (rawQuery.length > 200 || /[\p{Cc}\p{Cf}\p{Cs}]/u.test(rawQuery))
+    throw new HttpError(
+      422,
+      "INVENTORY_QUERY_INVALID",
+      "Inventory search must be at most 200 characters without control characters.",
+    );
+  const query = rawQuery.trim();
+  const filterValues = [group, status, query.toLowerCase()];
+  // One small aggregate result, never an application-side load of all items.
+  const counts = await db
     .prepare(
-      "SELECT item_id FROM inventory_items WHERE source_id=? AND episode_id=? AND item_id>? ORDER BY item_id LIMIT 21",
+      `WITH latest AS (${groupedLatestItemsSql}), filters AS (SELECT ? group_name,? status,? query)
+      SELECT json_extract(latest.item_json,'$.processing_status') status,latest.item_group group_name,
+        COUNT(*) total,SUM(CASE WHEN ${matchesFilterSql} THEN 1 ELSE 0 END) matched
+      FROM latest CROSS JOIN filters GROUP BY json_extract(latest.item_json,'$.processing_status'),latest.item_group`,
     )
-    .bind(INVENTORY_SOURCE, episode, after ?? "")
-    .all<{ item_id: string }>();
-  const page = identities.results.slice(0, 20);
-  const items = [];
-  for (const identity of page) {
-    // Sequence belongs to one durable source/episode writer; source clock is display-only.
-    const rows = await db
-      .prepare(
-        "SELECT receipt_id,observed_ms,sequence,item_json FROM inventory_observations WHERE source_id=? AND episode_id=? AND item_id=? AND sequence=(SELECT MAX(sequence) FROM inventory_observations WHERE source_id=? AND episode_id=? AND item_id=?) ORDER BY receipt_id LIMIT 21",
-      )
-      .bind(
-        INVENTORY_SOURCE,
-        episode,
-        identity.item_id,
-        INVENTORY_SOURCE,
-        episode,
-        identity.item_id,
-      )
-      .all<{
-        receipt_id: string;
-        observed_ms: number;
-        sequence: number;
-        item_json: string;
-      }>();
-    items.push({
-      id: identity.item_id,
-      readiness: "not_evaluated",
-      conflictingLatestObservations: rows.results.length > 1,
-      variantsTruncated: rows.results.length > 20,
-      variants: rows.results.slice(0, 20).map((row) => ({
+    .bind(INVENTORY_SOURCE, episode, ...filterValues)
+    .all<{
+      status: InventoryStatus;
+      group_name: Exclude<InventoryGroup, "all">;
+      total: number;
+      matched: number;
+    }>();
+  const statusCounts = Object.fromEntries(
+    INVENTORY_STATUSES.map((value) => [value, 0]),
+  ) as Record<InventoryStatus, number>;
+  const groupCounts: Record<InventoryGroup, number> = {
+    all: 0,
+    media: 0,
+    research: 0,
+    attention: 0,
+  };
+  let totalItems = 0;
+  let matchedItems = 0;
+  for (const row of counts.results) {
+    statusCounts[row.status] += row.total;
+    groupCounts[row.group_name] += row.total;
+    groupCounts.all += row.total;
+    totalItems += row.total;
+    matchedItems += row.matched;
+  }
+  const rows = await db
+    .prepare(
+      `WITH latest AS (${groupedLatestItemsSql}), filters AS (SELECT ? group_name,? status,? query)
+      SELECT latest.*,s.accepted_at,json_extract(s.receipt_json,'$.complete') receipt_complete,
+        json_extract(s.receipt_json,'$.scope') receipt_scope
+      FROM latest JOIN inventory_snapshots s ON s.receipt_id=latest.receipt_id CROSS JOIN filters
+      WHERE latest.item_id>? AND ${matchesFilterSql} ORDER BY latest.item_id LIMIT 21`,
+    )
+    .bind(INVENTORY_SOURCE, episode, ...filterValues, after ?? "")
+    .all<{
+      item_id: string;
+      receipt_id: string;
+      observed_ms: number;
+      sequence: number;
+      item_json: string;
+      accepted_at: string;
+      receipt_complete: number;
+      receipt_scope: string;
+    }>();
+  const page = rows.results.slice(0, 20);
+  const items: InventoryResponse["items"] = page.map((row) => ({
+    id: row.item_id,
+    readiness: "not_evaluated",
+    // Unique source/episode sequence and receipt/item keys ensure one latest row.
+    conflictingLatestObservations: false,
+    variantsTruncated: false,
+    variants: [
+      {
         receiptId: row.receipt_id,
         sequence: row.sequence,
         observedAt: new Date(row.observed_ms).toISOString(),
+        receivedAt: row.accepted_at,
+        receiptComplete: row.receipt_complete === 1,
+        receiptScope: row.receipt_scope,
         item: JSON.parse(row.item_json) as InventoryItem,
-      })),
-    });
-  }
+      },
+    ],
+  }));
   const snapshots = await db
     .prepare(
-      "SELECT receipt_json FROM inventory_snapshots WHERE source_id=? AND episode_id=? ORDER BY sequence DESC,receipt_id LIMIT 20",
+      "SELECT receipt_json,observed_ms,json_extract(manifest_json,'$.scan_finished_at') scan_finished_at,json_extract(manifest_json,'$.episode.number') episode_number FROM inventory_snapshots WHERE source_id=? AND episode_id=? ORDER BY sequence DESC,receipt_id LIMIT 20",
     )
     .bind(INVENTORY_SOURCE, episode)
-    .all<{ receipt_json: string }>();
+    .all<{
+      receipt_json: string;
+      observed_ms: number;
+      scan_finished_at: string;
+      episode_number: number;
+    }>();
+  const recentReceipts = snapshots.results.map((row) => ({
+    ...(JSON.parse(row.receipt_json) as InventoryReceipt),
+    observedAt: new Date(row.observed_ms).toISOString(),
+    scanFinishedAt: row.scan_finished_at,
+  }));
+  const arrival = await db
+    .prepare(
+      "SELECT MAX(accepted_at) accepted_at FROM inventory_snapshots WHERE source_id=? AND episode_id=?",
+    )
+    .bind(INVENTORY_SOURCE, episode)
+    .first<{ accepted_at: string | null }>();
+  const ingestionEnabled = options.ingestionEnabled === true;
   return {
     sourceId: INVENTORY_SOURCE,
     episodeId: episode,
+    episodeNumber:
+      options.episodeNumber ?? snapshots.results[0]?.episode_number ?? null,
     candidateCoverage: "partial",
-    ingestion: "disabled",
+    ingestion: ingestionEnabled ? "enabled" : "disabled",
+    ingestionPaused: !ingestionEnabled,
     identityCaveat:
       "Media IDs change on rename; redacted candidate URLs can merge identities.",
+    filters: {
+      group: group as InventoryGroup,
+      status: status as InventoryStatus | null,
+      query,
+    },
+    summary: { totalItems, matchedItems, statusCounts, groupCounts },
+    latestReceivedAt: arrival?.accepted_at ?? null,
+    latestObservedAt: recentReceipts[0]?.observedAt ?? null,
+    latestReceipt: recentReceipts[0] ?? null,
     items,
-    recentReceipts: snapshots.results.map(
-      (row) => JSON.parse(row.receipt_json) as InventoryReceipt,
-    ),
-    nextCursor: identities.results.length > 20 ? page.at(-1)!.item_id : null,
+    recentReceipts,
+    nextCursor: rows.results.length > 20 ? page.at(-1)!.item_id : null,
   };
 }

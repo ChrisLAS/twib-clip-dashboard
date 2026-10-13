@@ -1,3 +1,4 @@
+import { runInventoryBrowserRegression } from "./inventory-browser-regression.mjs";
 import {
   runWorkflowBrowserRegression,
   runPublicationBrowserRegression,
@@ -2399,6 +2400,17 @@ if (results.some((r) => !r.pass))
   await page
     .screenshot({ path: "test-results/browser-failure.png", fullPage: true })
     .catch(() => {});
+await runInventoryBrowserRegression({
+  browser,
+  baseURL: process.env.TEST_BASE_URL,
+  episode: initialEpisode,
+  check,
+  syntheticVideo,
+});
+await writeFile(
+  "test-results/browser-regression.json",
+  JSON.stringify(results, null, 2),
+);
 await browser.close();
 console.log(JSON.stringify(results, null, 2));
 process.exitCode = results.some((r) => !r.pass) ? 1 : 0;
