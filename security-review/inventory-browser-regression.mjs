@@ -272,6 +272,7 @@ export async function runInventoryBrowserRegression({
       "Inventory keyboard opens provenance and mobile timestamp",
       (await page.locator(".inventory-record[open]").count()) === 1 &&
         (await page
+          .locator(".inventory-record[open]")
           .getByText("Observed on source", { exact: true })
           .isVisible()),
     );
