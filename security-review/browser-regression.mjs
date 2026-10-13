@@ -1647,6 +1647,58 @@ try {
         .every((request) => request.method === "GET") &&
       googleRequests.length === 0,
   );
+  // Legacy decisions have no Cut down control; all available choices are exclusive.
+  await page
+    .getByRole("button", { name: "Review Clip c3 by Speaker c3" })
+    .click();
+  for (const viewport of [
+    { width: 1440, height: 1000 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    for (const [name, saved] of [
+      ["Approve", "Approved"],
+      ["Defer", "Deferred"],
+      ["Reject", "Rejected"],
+      ["Approve", "Approved"],
+      ["Clear", "Not reviewed"],
+    ]) {
+      await page.getByRole("button", { name: new RegExp("^" + name) }).click();
+      await page
+        .getByText("Decision saved · " + saved, { exact: true })
+        .waitFor();
+      check(
+        `Legacy ${viewport.width}px ${name} has one accessible and visually selected choice`,
+        await page.locator(".decision-buttons").evaluate((element) => {
+          const buttons = [...element.querySelectorAll("button")];
+          const selected = buttons.filter(
+            (button) => button.getAttribute("aria-pressed") === "true",
+          );
+          return (
+            selected.length === 1 &&
+            buttons
+              .filter((button) => button !== selected[0])
+              .every(
+                (button) =>
+                  getComputedStyle(button).backgroundColor !==
+                  getComputedStyle(selected[0]).backgroundColor,
+              )
+          );
+        }),
+      );
+    }
+  }
+  check(
+    "Legacy clip detail does not expose inventory Cut down control",
+    (await page
+      .getByRole("button", { name: "Cut down", exact: true })
+      .count()) === 0,
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page
+    .getByRole("button", { name: "Episode 1", exact: false })
+    .first()
+    .click();
   // A user save wins over a stale in-flight snapshot, even from the slate.
   await page
     .getByRole("button", { name: "Review Clip c2 by Speaker c2" })

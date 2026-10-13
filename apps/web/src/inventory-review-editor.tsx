@@ -9,6 +9,7 @@ import { api } from "./api";
 export interface InventoryReviewDraft {
   notes: string;
   reason: string;
+  status?: InventoryReviewStatus;
   revision: number;
   version: string;
 }
@@ -46,6 +47,12 @@ export function InventoryReviewEditor({
     !!draft &&
     !!saved &&
     (draft.version !== saved?.version || draft.revision !== saved?.revision);
+  const selectedStatus =
+    draft?.status ?? saved?.effectiveStatus ?? "unreviewed";
+  function choose(status: InventoryReviewStatus) {
+    onDraft({ ...value, status });
+    void save(status);
+  }
   function change(field: "notes" | "reason", text: string) {
     onDraft({ ...value, [field]: text });
   }
@@ -130,7 +137,11 @@ export function InventoryReviewEditor({
         />
       </label>
       <div className="inventory-review-actions">
-        <button type="button" disabled={disabled} onClick={() => void save()}>
+        <button
+          type="button"
+          disabled={disabled || draft?.status !== undefined}
+          onClick={() => void save()}
+        >
           Save note
         </button>
         {draft && <span>Unsaved draft</span>}
@@ -150,39 +161,64 @@ export function InventoryReviewEditor({
         when duration is longer or unknown. A saved decision applies to this
         observed version.
       </p>
-      <div className="inventory-review-actions">
+      <p className="inventory-review-choice-state" role="status">
+        {busy
+          ? `Saving ${reviewLabels[selectedStatus]}…`
+          : draft?.status
+            ? `Unsaved choice: ${reviewLabels[selectedStatus]}. Saved decision: ${reviewLabels[saved?.effectiveStatus ?? "unreviewed"]}.`
+            : `Saved decision: ${reviewLabels[selectedStatus]}.`}
+      </p>
+      <div
+        className="inventory-review-actions"
+        role="group"
+        aria-label="Review decision choices"
+      >
         <button
           type="button"
+          className="review-decision-button review-approved"
+          aria-pressed={selectedStatus === "approved"}
           disabled={disabled}
-          onClick={() => void save("approved")}
+          onClick={() => choose("approved")}
         >
           Approve
         </button>
         <button
           type="button"
-          className="quiet"
+          className="review-decision-button review-rejected"
+          aria-pressed={selectedStatus === "rejected"}
           disabled={disabled}
-          onClick={() => void save("rejected")}
+          onClick={() => choose("rejected")}
         >
           Reject
         </button>
         <button
           type="button"
-          className="quiet"
+          className="review-decision-button review-cut_down"
+          aria-pressed={selectedStatus === "cut_down"}
           disabled={disabled}
-          onClick={() => void save("cut_down")}
+          onClick={() => choose("cut_down")}
         >
           Cut down
         </button>
         <button
           type="button"
-          className="quiet"
+          className="review-decision-button review-unreviewed"
+          aria-pressed={selectedStatus === "unreviewed"}
           disabled={disabled}
-          onClick={() => void save("unreviewed")}
+          onClick={() => choose("unreviewed")}
         >
           Mark unreviewed
         </button>
       </div>
+      {draft?.status && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => void save(draft.status)}
+        >
+          Save decision
+        </button>
+      )}
       {(saved?.effectiveStatus === "rejected" ||
         saved?.effectiveStatus === "cut_down") && (
         <p className="muted">

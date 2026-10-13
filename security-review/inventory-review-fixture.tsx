@@ -84,6 +84,9 @@ const fixture = {
 let reads = 0,
   writes = 0;
 const inputs: unknown[] = [];
+let holdSave = false,
+  failSave = false;
+let releaseSave: (() => void) | undefined;
 api.inventory = async (input) => {
   reads++;
   inputs.push(input);
@@ -99,6 +102,16 @@ api.inventory = async (input) => {
   }) as unknown as InventoryResponse;
 };
 api.inventoryReview = async (body, csrf) => {
+  if (holdSave) {
+    holdSave = false;
+    await new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+  }
+  if (failSave) {
+    failSave = false;
+    throw Error("Synthetic failed save");
+  }
   if (
     csrf !== "fixture-csrf" ||
     body.itemId !== id ||
@@ -212,6 +225,10 @@ void (async () => {
         ?.textContent?.includes("Approved"),
       "persistent explicit approval visible in collapsed summary",
     );
+    check(
+      button("Approve").getAttribute("aria-pressed") === "true",
+      "approved inventory decision has accessible selected state",
+    );
     const before = reads;
     remount!();
     await until(() => reads > before);
@@ -223,6 +240,151 @@ void (async () => {
           ?.textContent?.includes("Approved"),
       "cold component reload restores note and approval from API",
     );
+    const choice = (name: string) => {
+      const selected = document.querySelectorAll(
+        '[aria-label="Review decision choices"] button[aria-pressed="true"]',
+      );
+      return selected.length === 1 && selected[0] === button(name);
+    };
+    edit("Trim the setup; this stores a request only", 1);
+    await sleep(80);
+    holdSave = true;
+    button("Cut down").click();
+    await until(() => releaseSave && button("Cut down").disabled);
+    check(
+      choice("Cut down") &&
+        button("Approve").getAttribute("aria-pressed") === "false",
+      "approve to cut-down immediately selects only cut-down while saving",
+    );
+    check(
+      document
+        .querySelector(".inventory-review-choice-state")
+        ?.textContent?.includes("Saving Cut down requested") &&
+        document
+          .querySelector(".inventory-record summary")
+          ?.textContent?.includes("Saved: Approved") &&
+        textarea().disabled,
+      "pending choice is distinct from saved row and inputs are protected",
+    );
+    releaseSave!();
+    releaseSave = undefined;
+    await until(
+      () => review.status === "cut_down" && !button("Cut down").disabled,
+    );
+    check(
+      choice("Cut down") &&
+        document
+          .querySelector(".inventory-record summary")
+          ?.textContent?.includes("Saved: Cut down requested"),
+      "saved cut-down selects only its button and updates main-list text",
+    );
+    const badge = document.querySelector(
+      ".inventory-record summary .review-cut_down",
+    )!;
+    check(
+      getComputedStyle(badge).backgroundColor !== "rgba(0, 0, 0, 0)" &&
+        Number(getComputedStyle(badge).fontWeight) >= 700,
+      "cut-down main-list badge has prominent color and weight",
+    );
+    check(
+      getComputedStyle(button("Cut down")).backgroundColor !==
+        getComputedStyle(button("Approve")).backgroundColor,
+      "saved cut-down alone has selected button fill",
+    );
+    await refresh();
+    check(
+      choice("Cut down") && textarea().value === "Saved owner note",
+      "refresh preserves cut-down highlight and saved notes",
+    );
+    button("Approve").click();
+    await until(
+      () => review.status === "approved" && !button("Approve").disabled,
+    );
+    check(
+      choice("Approve") &&
+        button("Cut down").getAttribute("aria-pressed") === "false",
+      "reverse cut-down to approve selects only approved",
+    );
+    await sleep(80);
+    failSave = true;
+    button("Cut down").click();
+    await until(() =>
+      document.querySelector('.inventory-review-editor [role="alert"]'),
+    );
+    check(
+      choice("Cut down") &&
+        document
+          .querySelector(".inventory-review-choice-state")
+          ?.textContent?.includes(
+            "Unsaved choice: Cut down requested. Saved decision: Approved",
+          ) &&
+        document
+          .querySelector(".inventory-record summary")
+          ?.textContent?.includes("Saved: Approved") &&
+        textarea().value === "Saved owner note",
+      "failed save retains explicit unsaved choice without altering saved approval or notes",
+    );
+    await refresh();
+    check(
+      choice("Cut down") &&
+        document
+          .querySelector(".inventory-record summary")
+          ?.textContent?.includes("Saved: Approved"),
+      "refresh after failure preserves unsaved choice and truthful saved badge",
+    );
+    button("Reload saved review").click();
+    await sleep(80);
+    check(
+      choice("Approve"),
+      "reload saved review clears failed choice and restores approval highlight",
+    );
+    review.revision++;
+    button("Cut down").click();
+    await until(() =>
+      document.querySelector('.inventory-review-editor [role="alert"]'),
+    );
+    await refresh();
+    check(
+      choice("Cut down") &&
+        button("Save decision").disabled &&
+        document
+          .querySelector(".inventory-record summary")
+          ?.textContent?.includes("Saved: Approved"),
+      "conflicting decision stays unsaved and blocks overwrite after refresh",
+    );
+    button("Keep my draft against latest").click();
+    await sleep(80);
+    button("Save decision").click();
+    await until(
+      () => review.status === "cut_down" && !button("Cut down").disabled,
+    );
+    await until(
+      () =>
+        document
+          .querySelector(".inventory-review-editor")
+          ?.textContent?.includes("No file has been moved or cut") &&
+        !button("Cut down").disabled,
+    );
+    check(
+      choice("Cut down") &&
+        textarea().value === "Saved owner note" &&
+        document
+          .querySelector(".inventory-review-editor")
+          ?.textContent?.includes("No file has been moved or cut"),
+      "explicit rebase saves cut-down request with notes and no job claim",
+    );
+    const details =
+      document.querySelector<HTMLDetailsElement>(".inventory-record")!;
+    details.open = false;
+    await sleep(80);
+    check(
+      details
+        .querySelector("summary")
+        ?.textContent?.includes("Saved: Cut down requested"),
+      "collapsed main list prominently retains cut-down request",
+    );
+    details.open = true;
+    await sleep(80);
     const input = document.querySelector<HTMLInputElement>(
       "input[webkitdirectory]",
     )!;

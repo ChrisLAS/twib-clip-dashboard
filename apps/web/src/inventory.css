@@ -872,17 +872,30 @@
   font-size: 0.75rem;
   line-height: 1.4;
 }
-.review-approved {
+.inventory-review-badge.review-approved {
   color: #a7d8ba;
   border-color: #4a8462;
 }
-.review-rejected {
+.inventory-review-badge.review-rejected {
   color: #e9b2ab;
   border-color: #9b6963;
 }
-.review-cut_down {
-  color: #e0c185;
-  border-color: #9c804c;
+.inventory-review-badge.review-cut_down {
+  color: #fff1cd;
+  background: #6b4a16;
+  border: 2px solid #f6c362;
+  padding: 5px 9px;
+  font-weight: 750;
+}
+.inventory-record-title small.inventory-review-badge.review-cut_down {
+  color: #fff1cd;
+  font-size: 0.85rem;
+}
+.inventory-review-choice-state {
+  padding: 8px 10px;
+  border-left: 3px solid #80909a;
+  background: #151b20;
+  font-size: 0.85rem;
 }
 .inventory-folder-toggle {
   display: flex;

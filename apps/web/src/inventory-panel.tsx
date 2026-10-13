@@ -106,6 +106,7 @@ function InventoryRecord({
           <small
             className={`inventory-review-badge review-${record.review?.effectiveStatus ?? "unreviewed"}`}
           >
+            Saved:{" "}
             {reviewLabels[record.review?.effectiveStatus ?? "unreviewed"]}
           </small>
           {formatHint && (
