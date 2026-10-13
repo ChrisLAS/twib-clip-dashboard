@@ -24,9 +24,30 @@ import {
   inventoryTimestamp,
 } from "./inventory-format";
 import "./inventory.css";
+import {
+  inventoryScopeKey,
+  matchEpisodeFile,
+  matchExplicitFile,
+  playbackEligible,
+} from "./inventory-local-media";
+import {
+  InventoryLocalPlayer,
+  type LocalPlaybackSelection,
+} from "./inventory-local-player";
 
 type RecordItem = InventoryResponse["items"][number];
-function InventoryRecord({ record }: { record: RecordItem }) {
+function InventoryRecord({
+  record,
+  onPlay,
+  onFile,
+  localMatch,
+}: {
+  record: RecordItem;
+  onPlay: () => void;
+  onFile: (file: File, confirmedRef: string) => void;
+  localMatch: string;
+}) {
+  const [confirmedRef, setConfirmedRef] = useState("");
   const variant = record.variants[0],
     item = variant?.item;
   if (!item) return null;
@@ -157,10 +178,55 @@ function InventoryRecord({ record }: { record: RecordItem }) {
             rechecked.
           </p>
         )}
+        {playbackEligible(record) && (
+          <div className="inventory-local-actions">
+            <p>
+              {localMatch === "matched"
+                ? "Selected local file matches the relative reference and size."
+                : localMatch === "ambiguous"
+                  ? "Ambiguous local selection. Select one episode folder again."
+                  : localMatch === "size_mismatch"
+                    ? "Local file size differs from the observation. Wait for sync or refresh inventory, then select again."
+                    : "Select your synced episode folder to play this file locally."}
+            </p>
+            <button onClick={onPlay} disabled={localMatch !== "matched"}>
+              Play selected local file
+            </button>
+            <details>
+              <summary>Select an individual file instead</summary>
+              <p>
+                The browser cannot report its parent folder. Type the exact
+                episode-relative reference above to bind the file to this record
+                explicitly.
+              </p>
+              <label>
+                Confirm full reference
+                <input
+                  value={confirmedRef}
+                  maxLength={1024}
+                  onChange={(event) => setConfirmedRef(event.target.value)}
+                />
+              </label>
+              <label>
+                Choose exact local file
+                <input
+                  type="file"
+                  disabled={confirmedRef !== item.media?.ref}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) onFile(file, confirmedRef);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
+            </details>
+          </div>
+        )}
         <p className="inventory-privacy">
           <ShieldCheck size={14} />
           Metadata only. Source URLs and editorial context are not displayed. No
-          media playback or producer actions.
+          producer actions. Local playback uses only files you explicitly
+          select.
         </p>
       </div>
     </details>
@@ -177,7 +243,65 @@ export function InventoryPanel({ active }: { active: boolean }) {
   const [data, setData] = useState<InventoryResponse | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [selection, setSelection] = useState<LocalPlaybackSelection | null>(
+    null,
+  );
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [selectionError, setSelectionError] = useState("");
+  const folderInput = useRef<HTMLInputElement>(null);
   const epoch = useRef(0);
+  useEffect(() => {
+    folderInput.current?.setAttribute("webkitdirectory", "");
+  }, [active]);
+  useEffect(() => {
+    if (!data) return;
+    setSelection((selected) => {
+      if (!selected) return selected;
+      if (
+        selected.sourceId !== data.sourceId ||
+        selected.episodeId !== data.episodeId
+      )
+        return null;
+      const current = data.items.find(
+        (record) => record.id === selected.record.id,
+      );
+      // Pages and partial snapshots can omit existing identities. Omission does
+      // not delete a selection, and a new sequence alone does not reset playback.
+      if (!current) return selected;
+      const oldMedia = selected.record.variants[0].item.media;
+      const newMedia = current.variants[0]?.item.media;
+      if (
+        !playbackEligible(current) ||
+        newMedia?.ref !== oldMedia?.ref ||
+        newMedia?.size_bytes !== oldMedia?.size_bytes
+      )
+        return selected.invalid ? selected : { ...selected, invalid: true };
+      return selected;
+    });
+  }, [data]);
+  function choose(record: RecordItem, file?: File, confirmedRef?: string) {
+    if (!data) return;
+    const match = file
+      ? matchExplicitFile(record, file, confirmedRef ?? "")
+      : matchEpisodeFile(record, files, data.episodeNumber ?? 127);
+    if (match.state !== "matched") {
+      setSelectionError(
+        "The selected file does not uniquely match the exact reference and observed size. No playback was opened.",
+      );
+      return;
+    }
+    setSelectionError("");
+    setSelection({
+      key: inventoryScopeKey(data.sourceId, data.episodeId, record.id),
+      sourceId: data.sourceId,
+      episodeId: data.episodeId,
+      record,
+      file: match.file,
+      manual: !!file,
+      mtimeDiffers: match.mtimeDiffers,
+    });
+  }
   useEffect(() => {
     const version = ++epoch.current;
     if (!active) return;
@@ -217,9 +341,12 @@ export function InventoryPanel({ active }: { active: boolean }) {
   }
   const count = data?.summary.totalItems;
   const latest = data?.latestReceipt;
-  if (!active) return null;
   return (
-    <section className="inventory-workspace" aria-labelledby="inventory-title">
+    <section
+      hidden={!active}
+      className="inventory-workspace"
+      aria-labelledby="inventory-title"
+    >
       <div className="inventory-heading">
         <div>
           <p className="eyebrow copper">NUMBER ONE / SOURCE INVENTORY</p>
@@ -275,6 +402,55 @@ export function InventoryPanel({ active }: { active: boolean }) {
             Retry inventory
           </button>
         </div>
+      )}
+      <div className="inventory-local-picker">
+        <label>
+          Choose synced episode 127 folder
+          <input
+            ref={folderInput}
+            type="file"
+            multiple
+            onChange={(event) => {
+              setFiles(Array.from(event.target.files ?? []));
+              setSelectionError("");
+              event.target.value = "";
+            }}
+          />
+        </label>
+        <p>
+          Choose the folder named <code>127</code>, not its parent. Firefox and
+          Chrome grant access only after your selection. Nothing is uploaded;
+          reload requires selecting again.
+        </p>
+        {!!files.length && (
+          <p role="status">
+            {files.length} local files selected. Exact relative references and
+            size are used; matching filenames alone are insufficient.
+          </p>
+        )}
+        {(files.length > 0 || selection) && (
+          <button
+            className="quiet"
+            onClick={() => {
+              setFiles([]);
+              setSelection(null);
+            }}
+          >
+            Release selected local files
+          </button>
+        )}
+        {selectionError && <p role="alert">{selectionError}</p>}
+      </div>
+      {selection && (
+        <InventoryLocalPlayer
+          selection={selection}
+          active={active}
+          note={notes[selection.key] ?? ""}
+          onNote={(value) =>
+            setNotes((old) => ({ ...old, [selection.key]: value }))
+          }
+          onClose={() => setSelection(null)}
+        />
       )}
       <div aria-busy={loading}>
         <div
@@ -485,8 +661,18 @@ export function InventoryPanel({ active }: { active: boolean }) {
               </div>
               {data.items.map((item) => (
                 <InventoryRecord
-                  key={`${item.id}-${item.variants[0]?.sequence}`}
+                  key={inventoryScopeKey(
+                    data.sourceId,
+                    data.episodeId,
+                    item.id,
+                  )}
                   record={item}
+                  localMatch={
+                    matchEpisodeFile(item, files, data.episodeNumber ?? 127)
+                      .state
+                  }
+                  onPlay={() => choose(item)}
+                  onFile={(file, ref) => choose(item, file, ref)}
                 />
               ))}
             </div>
