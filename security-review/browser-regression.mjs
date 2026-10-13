@@ -1838,7 +1838,13 @@ try {
       (await uploadFolder.getAttribute("target")) === "_blank" &&
       /\bnoopener\b/.test(await uploadFolder.getAttribute("rel")) &&
       /\bnoreferrer\b/.test(await uploadFolder.getAttribute("rel")) &&
-      (await page.locator('input[type="file"],iframe').count()) === 0 &&
+      (await intakeDialog.locator('input[type="file"],iframe').count()) === 0 &&
+      (await page.locator("iframe").count()) === 0 &&
+      (await page.locator('input[type="file"]').count()) ===
+        (await page
+          .locator('.inventory-workspace input[type="file"]')
+          .count()) &&
+      !(await page.locator(".inventory-workspace").isVisible()) &&
       (await intakeDialog
         .getByText(/The dashboard does not upload files/)
         .isVisible()),

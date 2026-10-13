@@ -13,6 +13,40 @@ export async function runInventoryBrowserRegression({
     timezoneId: "UTC",
     reducedMotion: "reduce",
   });
+  // Observe the actual composed fetch signal. Retaining a hidden player does
+  // not imply that a pending inventory read may continue after navigation.
+  await page.addInitScript(() => {
+    const original = globalThis.fetch.bind(globalThis);
+    globalThis.__inventoryReads = [];
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(
+        input instanceof globalThis.Request ? input.url : String(input),
+        globalThis.location.href,
+      );
+      if (url.pathname !== "/api/inventory") return original(input, init);
+      const signal =
+        init?.signal ??
+        (input instanceof globalThis.Request ? input.signal : null);
+      const read = {
+        url: url.href,
+        aborted: signal?.aborted ?? false,
+        settled: false,
+      };
+      globalThis.__inventoryReads.push(read);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          read.aborted = true;
+        },
+        { once: true },
+      );
+      try {
+        return await original(input, init);
+      } finally {
+        read.settled = true;
+      }
+    };
+  });
   const states = [
     ...Array(15).fill("candidate"),
     ...Array(14).fill("captured_observed"),
@@ -426,22 +460,74 @@ export async function runInventoryBrowserRegression({
     failInventory = false;
     await page.getByRole("button", { name: "Retry inventory" }).click();
     await page.getByText("48 matching records", { exact: true }).waitFor();
+    const slateBeforeRead = await page.locator(".clip-row").allTextContents();
+    const readMarker = await page.evaluate(
+      () => globalThis.__inventoryReads.length,
+    );
     hold = true;
     await page.getByRole("button", { name: /Candidate 15/ }).click();
+    await page.waitForFunction(
+      (marker) =>
+        globalThis.__inventoryReads
+          .slice(marker)
+          .some(
+            (read) =>
+              new URL(read.url).searchParams.get("status") === "candidate" &&
+              !read.aborted &&
+              !read.settled,
+          ),
+      readMarker,
+    );
+    const heldDeadline = Date.now() + 5000;
+    while (!held.length) {
+      if (Date.now() >= heldDeadline)
+        throw new Error("Candidate inventory read was never held");
+      await page.waitForTimeout(25);
+    }
     await page
       .getByRole("button", { name: "Episode slate", exact: true })
       .filter({ visible: true })
       .first()
       .click();
+    await page.waitForFunction(
+      (marker) =>
+        globalThis.__inventoryReads
+          .slice(marker)
+          .some(
+            (read) =>
+              new URL(read.url).searchParams.get("status") === "candidate" &&
+              read.aborted,
+          ),
+      readMarker,
+    );
+    const inventory = page.locator(".inventory-workspace");
+    const hiddenBeforeRelease = await inventory.textContent();
     hold = false;
     held.splice(0).forEach((resolve) => resolve());
     await page
       .getByRole("button", { name: /Review / })
       .first()
       .waitFor();
+    await page.waitForTimeout(100);
     check(
       "Leaving inventory cancels stale read without changing slate",
-      !(await page.locator(".inventory-workspace").count()),
+      (await inventory.count()) === 1 &&
+        (await inventory.getAttribute("hidden")) !== null &&
+        !(await inventory.isVisible()) &&
+        (await inventory.textContent()) === hiddenBeforeRelease &&
+        JSON.stringify(await page.locator(".clip-row").allTextContents()) ===
+          JSON.stringify(slateBeforeRead) &&
+        (await page.evaluate(
+          (marker) =>
+            globalThis.__inventoryReads
+              .slice(marker)
+              .some(
+                (read) =>
+                  new URL(read.url).searchParams.get("status") ===
+                    "candidate" && read.aborted,
+              ),
+          readMarker,
+        )),
     );
     await page.goBack();
     await page.getByText("15 matching records", { exact: true }).waitFor();
