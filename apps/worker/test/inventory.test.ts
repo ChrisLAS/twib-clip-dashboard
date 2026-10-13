@@ -12,7 +12,11 @@ import {
   type InventoryManifest,
   type InventoryEnvelope,
 } from "../src/inventory/contract";
-import { acceptInventory, listInventory } from "../src/inventory/store";
+import {
+  acceptInventory,
+  inventoryEpisodeSelection,
+  listInventory,
+} from "../src/inventory/store";
 import worker from "../src/index";
 import type { Env } from "../src/env";
 const example = JSON.parse(
@@ -450,6 +454,334 @@ describe("durable isolated inventory storage", () => {
     expect(
       new Set([...first.items, ...second.items].map((item) => item.id)).size,
     ).toBe(23);
+  });
+});
+describe("owner inventory read model", () => {
+  const syntheticItems = (length: number) =>
+    Array.from({ length }, (_, i) => ({
+      ...structuredClone(example.items[0]),
+      id: "item_" + i.toString(16).padStart(64, "0"),
+      processing_status: i % 2 === 0 ? "failed" : "capture_required",
+      observations: [
+        {
+          artifact: `transcripts/synthetic-${i}.json`,
+          status: "candidate",
+          context: {},
+          timestamps: {},
+        },
+      ],
+    }));
+  it("counts every retained latest identity independently of page, filter and snapshot size", async () => {
+    const original = copy();
+    original.items = syntheticItems(43);
+    await accept(original);
+    const newer = changed();
+    newer.items = [structuredClone(original.items[0])];
+    newer.items[0].processing_status = "quarantined";
+    newer.items[0].kind = "media";
+    newer.items[0].media = {
+      ref: "synthetic-0.mp4",
+      present: true,
+      size_bytes: 1,
+      modified_at: null,
+      duration_seconds: null,
+    };
+    newer.snapshot.complete = false;
+    await accept(newer);
+    const empty = changed("b");
+    empty.items = [];
+    await accept(empty);
+    const prepare = vi.fn((sql: string) => db.prepare(sql));
+    const view = await listInventory(
+      { prepare } as unknown as D1Database,
+      original.episode.id,
+    );
+    expect(prepare).toHaveBeenCalledTimes(4);
+    expect(view.items).toHaveLength(20);
+    expect(view.summary).toEqual({
+      totalItems: 43,
+      matchedItems: 43,
+      statusCounts: {
+        candidate: 0,
+        capture_required: 21,
+        failed: 21,
+        captured_observed: 0,
+        unverified: 0,
+        incomplete: 0,
+        missing: 0,
+        quarantined: 1,
+      },
+    });
+    expect(view.latestReceipt?.stored_item_count).toBe(0);
+    const filtered = await listInventory(db, original.episode.id, null, {
+      status: "failed",
+    });
+    expect(filtered.summary).toEqual({ ...view.summary, matchedItems: 21 });
+    expect(filtered.items).toHaveLength(20);
+    const rest = await listInventory(
+      db,
+      original.episode.id,
+      filtered.nextCursor,
+      { status: "failed" },
+    );
+    expect(rest.items).toHaveLength(1);
+    expect(rest.summary).toEqual(filtered.summary);
+    expect(rest.nextCursor).toBeNull();
+    expect(
+      new Set([...filtered.items, ...rest.items].map((item) => item.id)).size,
+    ).toBe(21);
+  });
+  it("searches current relative references, item IDs and evidence, with literal wildcard characters", async () => {
+    const manifest = copy();
+    manifest.items = syntheticItems(3);
+    manifest.items[0].kind = "media";
+    manifest.items[0].processing_status = "unverified";
+    manifest.items[0].media = {
+      ref: "synthetic%_clip.mp4",
+      present: true,
+      size_bytes: 1,
+      modified_at: null,
+      duration_seconds: null,
+    };
+    manifest.items[1].capture_evidence = [
+      {
+        artifact: "capture-receipts/synthetic-evidence.json",
+        matches_observed_size: false,
+        content_hash_verified: false,
+        streams_reprobed: false,
+      },
+    ];
+    await accept(manifest);
+    const search = (query: string) =>
+      listInventory(db, manifest.episode.id, null, { query });
+    expect((await search("%_")).items.map((item) => item.id)).toEqual([
+      manifest.items[0].id,
+    ]);
+    expect(
+      (await search(" SYNTHETIC-1.JSON ")).items.map((item) => item.id),
+    ).toEqual([manifest.items[1].id]);
+    expect(
+      (await search("synthetic-evidence")).items.map((item) => item.id),
+    ).toEqual([manifest.items[1].id]);
+    expect(
+      (await search(manifest.items[2].id)).items.map((item) => item.id),
+    ).toEqual([manifest.items[2].id]);
+    expect((await search("' OR 1=1 --")).summary.matchedItems).toBe(0);
+    expect((await search("youtube")).items).toHaveLength(0);
+    const replacement = changed();
+    replacement.items = [structuredClone(manifest.items[1])];
+    replacement.items[0].observations[0].artifact =
+      "transcripts/replacement.json";
+    replacement.items[0].capture_evidence = [];
+    await accept(replacement);
+    expect((await search("synthetic-1.json")).items).toHaveLength(0);
+    expect((await search("synthetic-evidence")).items).toHaveLength(0);
+    expect((await search("replacement")).items).toHaveLength(1);
+  });
+  it("applies search and status before pagination and combines them", async () => {
+    const manifest = copy();
+    manifest.items = syntheticItems(50);
+    for (const item of manifest.items)
+      item.observations[0].artifact =
+        item.processing_status === "failed"
+          ? "transcripts/synthetic-match.json"
+          : "transcripts/unrelated.json";
+    await accept(manifest);
+    const options = { query: "synthetic-match", status: "failed" };
+    const first = await listInventory(db, manifest.episode.id, null, options);
+    const next = await listInventory(
+      db,
+      manifest.episode.id,
+      first.nextCursor,
+      options,
+    );
+    expect(first.items).toHaveLength(20);
+    expect(next.items).toHaveLength(5);
+    expect(first.summary.matchedItems).toBe(25);
+    expect(next.summary.matchedItems).toBe(25);
+    expect(next.nextCursor).toBeNull();
+    expect(
+      (
+        await listInventory(db, manifest.episode.id, null, {
+          ...options,
+          status: "capture_required",
+        })
+      ).items,
+    ).toHaveLength(0);
+  });
+  it("keeps source and episode isolation for counts, filters and receipts", async () => {
+    const receipt = await accept();
+    const otherEpisode = await inventoryEpisodeId(128);
+    const manifest = changed();
+    manifest.episode = { ...manifest.episode, id: otherEpisode, number: 128 };
+    manifest.items = syntheticItems(3);
+    await accept(manifest, db, {
+      ...grant,
+      episodeId: otherEpisode,
+      episodeNumber: 128,
+    });
+    sqlite
+      .prepare(
+        `INSERT INTO inventory_snapshots
+      SELECT 'synthetic-other-receipt','nomad:other',episode_id,digest,scan_id,sequence,
+        envelope_hash,payload_hash,observed_ms,accepted_at,manifest_json,receipt_json
+      FROM inventory_snapshots WHERE receipt_id=?`,
+      )
+      .run(receipt.receipt_id);
+    sqlite
+      .prepare(
+        "INSERT INTO inventory_items SELECT 'nomad:other',episode_id,item_id FROM inventory_items WHERE source_id=? AND episode_id=?",
+      )
+      .run("nomad:number-one", example.episode.id);
+    sqlite
+      .prepare(
+        `INSERT INTO inventory_observations
+      SELECT 'synthetic-other-receipt','nomad:other',episode_id,item_id,observed_ms,sequence,item_json
+      FROM inventory_observations WHERE receipt_id=?`,
+      )
+      .run(receipt.receipt_id);
+    const view = await listInventory(db, example.episode.id);
+    expect(view.summary.totalItems).toBe(1);
+    expect(view.recentReceipts).toHaveLength(1);
+    expect(view.latestReceipt?.receipt_id).toBe(receipt.receipt_id);
+    expect((await listInventory(db, otherEpisode)).summary.totalItems).toBe(3);
+    const absent = await listInventory(db, await inventoryEpisodeId(129));
+    expect(absent.summary.totalItems).toBe(0);
+    expect(absent.summary.matchedItems).toBe(0);
+    expect(absent.latestReceipt).toBeNull();
+    expect(absent.latestReceivedAt).toBeNull();
+    expect(absent.latestObservedAt).toBeNull();
+  });
+  it("distinguishes late receipt arrival from the latest sequence and source clock", async () => {
+    const newer = changed("a", "2026-10-12T09:00:00Z");
+    newer.snapshot.complete = false;
+    newer.items[0].processing_status = "failed";
+    const latest = await accept(newer, db, grant, { sequence: 100 });
+    const older = transport(copy(), { sequence: 1 });
+    await acceptInventory(db, older, older.scan_id, grant, now + 1000);
+    const view = await listInventory(db, example.episode.id);
+    expect(view.latestReceipt?.receipt_id).toBe(latest.receipt_id);
+    expect(view.latestReceipt?.complete).toBe(false);
+    expect(view.latestObservedAt).toBe(
+      new Date(newer.observed_at).toISOString(),
+    );
+    expect(view.latestReceivedAt).toBe(new Date(now + 1000).toISOString());
+    expect(view.latestReceipt?.scanFinishedAt).toBe(newer.scan_finished_at);
+    expect(view.items[0].variants[0]).toMatchObject({
+      sequence: 100,
+      receivedAt: latest.accepted_at,
+      observedAt: new Date(newer.observed_at).toISOString(),
+      receiptComplete: false,
+      receiptScope: latest.scope,
+    });
+    expect(view.summary.statusCounts.failed).toBe(1);
+  });
+  it.each([
+    { status: "ready" },
+    { status: "" },
+    { query: "x".repeat(201) },
+    { query: "synthetic\n" },
+    { query: "synthetic\u202e" },
+  ])(
+    "rejects unsupported filters before touching the DB: %j",
+    async (options) => {
+      const prepare = vi.fn();
+      await expect(
+        listInventory(
+          { prepare } as unknown as D1Database,
+          example.episode.id,
+          null,
+          options,
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+      expect(prepare).not.toHaveBeenCalled();
+    },
+  );
+  it("derives only the registered pilot's exact inventory identity", async () => {
+    expect(
+      await inventoryEpisodeSelection(new URLSearchParams("episodeNumber=127")),
+    ).toEqual({ episodeId: example.episode.id, episodeNumber: 127 });
+    expect(
+      await inventoryEpisodeSelection(
+        new URLSearchParams({ episodeId: example.episode.id }),
+      ),
+    ).toEqual({ episodeId: example.episode.id, episodeNumber: null });
+    await expect(
+      inventoryEpisodeSelection(new URLSearchParams("episodeNumber=128")),
+    ).rejects.toMatchObject({
+      status: 404,
+      code: "INVENTORY_EPISODE_UNMAPPED",
+    });
+    await expect(
+      inventoryEpisodeSelection(
+        new URLSearchParams({
+          episodeNumber: "127",
+          episodeId: await inventoryEpisodeId(128),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: "INVENTORY_EPISODE_MISMATCH",
+    });
+  });
+  it.each(["", "0", "-1", "127.0", "00127", "1e2", "1000000"])(
+    "rejects a noncanonical episode number: %s",
+    async (value) => {
+      await expect(
+        inventoryEpisodeSelection(
+          new URLSearchParams({ episodeNumber: value }),
+        ),
+      ).rejects.toMatchObject({ status: 422 });
+    },
+  );
+  it.each(["episodeNumber", "episodeId", "after", "status", "q"])(
+    "rejects duplicate query parameters: %s",
+    async (name) => {
+      const params = new URLSearchParams("episodeNumber=127");
+      params.set(name, "one");
+      params.append(name, "two");
+      await expect(inventoryEpisodeSelection(params)).rejects.toMatchObject({
+        status: 422,
+      });
+    },
+  );
+  it("reports only the explicit receiver gate, preserving disabled-by-default reads", async () => {
+    const paused = await listInventory(db, example.episode.id);
+    expect(paused.ingestion).toBe("disabled");
+    expect(paused.ingestionPaused).toBe(true);
+    const gateOpen = await listInventory(db, example.episode.id, null, {
+      ingestionEnabled: true,
+    });
+    expect(gateOpen.ingestion).toBe("enabled");
+    expect(gateOpen.ingestionPaused).toBe(false);
+  });
+  it("serves the independent pilot scope through owner read routing without enabling ingestion", async () => {
+    await accept();
+    const env = {
+      APP_ENV: "local",
+      LOCAL_DEMO: "true",
+      DB: db,
+      INVENTORY_INGEST_ENABLED: "false",
+    } as Env;
+    const response = await worker.fetch(
+      new Request(
+        "http://localhost/api/inventory?episodeNumber=127&status=capture_required",
+      ),
+      env,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      episodeId: example.episode.id,
+      episodeNumber: 127,
+      ingestion: "disabled",
+      ingestionPaused: true,
+      summary: { totalItems: 1, matchedItems: 1 },
+    });
+    const unmapped = await worker.fetch(
+      new Request("http://localhost/api/inventory?episodeNumber=128"),
+      env,
+    );
+    expect(unmapped.status).toBe(404);
   });
 });
 describe("HTTP fail-closed boundary", () => {

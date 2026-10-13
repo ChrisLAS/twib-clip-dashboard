@@ -1,5 +1,5 @@
 import { ingestInventory } from "./inventory/http";
-import { inventoryEpisodeParameter, listInventory } from "./inventory/store";
+import { inventoryEpisodeSelection, listInventory } from "./inventory/store";
 import {
   renderTranscriptInputSchema,
   importRenderTranscriptAsset,
@@ -154,15 +154,22 @@ export default {
             intakeProducer: false,
           },
         });
-      else if (path === "/api/inventory" && method === "GET")
+      else if (path === "/api/inventory" && method === "GET") {
+        const selection = await inventoryEpisodeSelection(url.searchParams);
         result = json(
           await listInventory(
             env.DB,
-            inventoryEpisodeParameter(url.searchParams.get("episodeId")),
+            selection.episodeId,
             url.searchParams.get("after"),
+            {
+              episodeNumber: selection.episodeNumber,
+              status: url.searchParams.get("status"),
+              query: url.searchParams.get("q"),
+              ingestionEnabled: env.INVENTORY_INGEST_ENABLED === "true",
+            },
           ),
         );
-      else if (path === "/api/publication" && method === "GET")
+      } else if (path === "/api/publication" && method === "GET")
         result = json(await publicationStatus(env));
       else if (path === "/api/publication/sync" && method === "POST") {
         z.object({})

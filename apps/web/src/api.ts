@@ -1,3 +1,4 @@
+import type { InventoryResponse, InventoryStatus } from "@twib/shared";
 import type {
   ApiError,
   CatalogStatus,
@@ -46,6 +47,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json();
 }
 export const api = {
+  inventory: (
+    input: {
+      episodeNumber: number;
+      status: InventoryStatus | null;
+      query: string;
+      after: string | null;
+    },
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams({
+      episodeNumber: String(input.episodeNumber),
+    });
+    if (input.status) params.set("status", input.status);
+    if (input.query) params.set("q", input.query);
+    if (input.after) params.set("after", input.after);
+    return request<InventoryResponse>(
+      `/api/inventory?${params}`,
+      readOptions(signal),
+    );
+  },
   importApproved: async (csrf: string, signal?: AbortSignal) => {
     try {
       return await request<{ imported: number }>("/api/import", {
