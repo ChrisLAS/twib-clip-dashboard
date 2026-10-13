@@ -794,3 +794,123 @@
 .inventory-local-actions details[open] > summary {
   list-style: disclosure-open;
 }
+
+.inventory-folder-group > h2 {
+  padding: 14px 18px;
+  margin: 0;
+  border-bottom: 1px solid var(--border, #343b3d);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+.inventory-folder-group > h2 small {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--muted, #9da6a5);
+}
+.inventory-row-review {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 18px;
+  margin-top: 18px;
+  align-items: start;
+}
+.inventory-row-review:not(:has(.inventory-local-player)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.inventory-row-review .inventory-local-player {
+  margin: 0;
+  min-width: 0;
+}
+.inventory-row-review video {
+  max-height: 420px;
+}
+.inventory-review-editor {
+  min-width: 0;
+  border: 1px solid var(--border, #343b3d);
+  border-radius: 8px;
+  padding: 16px;
+}
+.inventory-review-editor h3 {
+  margin: 0 0 14px;
+  font-size: 1rem;
+}
+.inventory-review-editor label {
+  display: grid;
+  gap: 7px;
+  margin-top: 13px;
+  font-size: 0.85rem;
+}
+.inventory-review-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 84px;
+  resize: vertical;
+}
+.inventory-review-actions,
+.inventory-review-conflict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.inventory-review-conflict p {
+  flex-basis: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.inventory-review-actions span {
+  font-size: 0.75rem;
+  color: var(--muted, #9da6a5);
+}
+.inventory-review-badge {
+  display: inline-block;
+  width: fit-content;
+  padding: 3px 7px;
+  border: 1px solid #626b6b;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+.review-approved {
+  color: #a7d8ba;
+  border-color: #4a8462;
+}
+.review-rejected {
+  color: #e9b2ab;
+  border-color: #9b6963;
+}
+.review-cut_down {
+  color: #e0c185;
+  border-color: #9c804c;
+}
+.inventory-folder-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.85rem;
+}
+.inventory-folder-toggle input {
+  width: auto;
+}
+.inventory-review-notice {
+  padding: 10px 14px;
+  border-left: 3px solid #4a8462;
+}
+@media (max-width: 900px) {
+  .inventory-row-review {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.inventory-folder-heading {
+  padding: 14px 18px;
+  margin: 0;
+  border-bottom: 1px solid var(--border, #343b3d);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+.inventory-folder-heading small {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--muted, #9da6a5);
+}

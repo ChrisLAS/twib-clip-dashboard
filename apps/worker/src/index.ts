@@ -1,5 +1,6 @@
 import { ingestInventory } from "./inventory/http";
 import { inventoryEpisodeSelection, listInventory } from "./inventory/store";
+import { saveInventoryReview } from "./inventory/review";
 import {
   renderTranscriptInputSchema,
   importRenderTranscriptAsset,
@@ -166,11 +167,19 @@ export default {
               group: url.searchParams.get("group"),
               status: url.searchParams.get("status"),
               query: url.searchParams.get("q"),
+              sort: url.searchParams.get("sort"),
+              direction: url.searchParams.get("direction"),
+              review: url.searchParams.get("review"),
+              groupFolders: url.searchParams.get("groupFolders") === "true",
               ingestionEnabled: env.INVENTORY_INGEST_ENABLED === "true",
             },
           ),
         );
-      } else if (path === "/api/publication" && method === "GET")
+      } else if (path === "/api/inventory/review" && method === "POST")
+        result = json(
+          await saveInventoryReview(env.DB, await body(request, 24000), owner),
+        );
+      else if (path === "/api/publication" && method === "GET")
         result = json(await publicationStatus(env));
       else if (path === "/api/publication/sync" && method === "POST") {
         z.object({})

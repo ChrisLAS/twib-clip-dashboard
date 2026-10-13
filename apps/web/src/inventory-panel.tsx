@@ -1,3 +1,9 @@
+import {
+  InventoryReviewEditor,
+  reviewLabels,
+  type InventoryReviewDraft,
+} from "./inventory-review-editor";
+import type { InventoryReview, InventoryReviewStatus } from "@twib/shared";
 import { useEffect, useRef, useState } from "react";
 import {
   Archive,
@@ -41,13 +47,32 @@ function InventoryRecord({
   onPlay,
   onFile,
   localMatch,
+  pinned,
+  selection,
+  active,
+  csrfToken,
+  reviewDraft,
+  onReviewDraft,
+  onReviewSaved,
+  onClose,
+  onRefresh,
 }: {
   record: RecordItem;
   onPlay: () => void;
   onFile: (file: File, confirmedRef: string) => void;
   localMatch: string;
+  pinned?: boolean;
+  selection: LocalPlaybackSelection | null;
+  active: boolean;
+  csrfToken?: string;
+  reviewDraft?: InventoryReviewDraft;
+  onReviewDraft: (draft: InventoryReviewDraft | null) => void;
+  onReviewSaved: (review: InventoryReview) => void;
+  onClose: () => void;
+  onRefresh: () => void;
 }) {
   const [confirmedRef, setConfirmedRef] = useState("");
+  const [expanded, setExpanded] = useState(false);
   const variant = record.variants[0],
     item = variant?.item;
   if (!item) return null;
@@ -55,7 +80,10 @@ function InventoryRecord({
   const formatHint = inventoryFormatHint(item.media?.ref);
   const title = item.media?.ref ?? `Candidate ${record.id.slice(-12)}`;
   return (
-    <details className={`inventory-record inventory-tone-${status}`}>
+    <details
+      className={`inventory-record inventory-tone-${status}`}
+      onToggle={(e) => setExpanded(e.currentTarget.open)}
+    >
       <summary>
         <span className="inventory-file-icon">
           {item.kind === "media" ? (
@@ -75,6 +103,11 @@ function InventoryRecord({
               ? inventoryBytes(item.media.size_bytes)
               : "Candidate metadata"}
           </small>
+          <small
+            className={`inventory-review-badge review-${record.review?.effectiveStatus ?? "unreviewed"}`}
+          >
+            {reviewLabels[record.review?.effectiveStatus ?? "unreviewed"]}
+          </small>
           {formatHint && (
             <small className="inventory-format-hint">{formatHint}</small>
           )}
@@ -83,11 +116,19 @@ function InventoryRecord({
           {inventoryStatusLabels[status] ?? status}
         </span>
         <span className="inventory-record-time">
-          {inventoryTimestamp(variant.observedAt)}
+          {record.firstObservedAt
+            ? inventoryTimestamp(record.firstObservedAt)
+            : "First observed not recorded"}
         </span>
         <ChevronDown className="inventory-chevron" size={17} />
       </summary>
       <div className="inventory-record-details">
+        {pinned && (
+          <p className="inventory-warning">
+            Selected clip outside this response. Its local selection and draft
+            are retained; refresh or reselect after sync changes.
+          </p>
+        )}
         <p className="inventory-status-explanation">
           {inventoryStatusNotes[status] ?? inventoryStatusNotes.unknown}
         </p>
@@ -101,6 +142,27 @@ function InventoryRecord({
           <div>
             <dt>Reported by</dt>
             <dd>Number One · Nomad</dd>
+          </div>
+          <div>
+            <dt>Number One record</dt>
+            <dd>
+              {record.producerRecord?.clip_uid ??
+                record.producerRecord?.clip_id ??
+                "Legacy inventory identity"}
+            </dd>
+          </div>
+          <div>
+            <dt>First observed</dt>
+            <dd>{inventoryTimestamp(record.firstObservedAt)}</dd>
+          </div>
+          <div>
+            <dt>Capture completed (producer)</dt>
+            <dd>
+              {inventoryTimestamp(
+                item.observations.find((o) => o.timestamps.captured_at)
+                  ?.timestamps.captured_at,
+              )}
+            </dd>
           </div>
           <div>
             <dt>Downloaded or created by</dt>
@@ -222,17 +284,40 @@ function InventoryRecord({
             </details>
           </div>
         )}
+        <div className="inventory-row-review">
+          {selection && (
+            <InventoryLocalPlayer
+              selection={selection}
+              active={active && expanded}
+              onClose={onClose}
+            />
+          )}
+          <InventoryReviewEditor
+            record={record}
+            csrfToken={csrfToken}
+            draft={reviewDraft}
+            onDraft={onReviewDraft}
+            onSaved={onReviewSaved}
+            onRefresh={onRefresh}
+          />
+        </div>
         <p className="inventory-privacy">
           <ShieldCheck size={14} />
-          Metadata only. Source URLs and editorial context are not displayed. No
-          producer actions. Local playback uses only files you explicitly
-          select.
+          Source URLs and producer editorial context are not displayed. Saving
+          reviews changes dashboard metadata only. Local playback uses files you
+          explicitly select; no host file operations are enabled.
         </p>
       </div>
     </details>
   );
 }
-export function InventoryPanel({ active }: { active: boolean }) {
+export function InventoryPanel({
+  active,
+  csrfToken,
+}: {
+  active: boolean;
+  csrfToken?: string;
+}) {
   const [group, setGroup] = useState<InventoryGroup>("media");
   const [status, setStatus] = useState<InventoryStatus | null>(null),
     [query, setQuery] = useState(""),
@@ -247,10 +332,20 @@ export function InventoryPanel({ active }: { active: boolean }) {
   const [selection, setSelection] = useState<LocalPlaybackSelection | null>(
     null,
   );
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [reviewDrafts, setReviewDrafts] = useState<
+    Record<string, InventoryReviewDraft>
+  >({});
+  const [sort, setSort] = useState<"filename" | "first_observed">("filename");
+  const [direction, setDirection] = useState<"asc" | "desc">("asc");
+  const [reviewFilter, setReviewFilter] = useState<
+    "all" | InventoryReviewStatus
+  >("all");
+  const [groupFolders, setGroupFolders] = useState(true);
+  const [reviewNotice, setReviewNotice] = useState("");
   const [selectionError, setSelectionError] = useState("");
   const folderInput = useRef<HTMLInputElement>(null);
   const epoch = useRef(0);
+
   useEffect(() => {
     folderInput.current?.setAttribute("webkitdirectory", "");
   }, [active]);
@@ -274,7 +369,8 @@ export function InventoryPanel({ active }: { active: boolean }) {
       if (
         !playbackEligible(current) ||
         newMedia?.ref !== oldMedia?.ref ||
-        newMedia?.size_bytes !== oldMedia?.size_bytes
+        newMedia?.size_bytes !== oldMedia?.size_bytes ||
+        newMedia?.modified_at !== oldMedia?.modified_at
       )
         return selected.invalid ? selected : { ...selected, invalid: true };
       return selected;
@@ -308,10 +404,19 @@ export function InventoryPanel({ active }: { active: boolean }) {
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    setData(null);
     api
       .inventory(
-        { episodeNumber: 127, group, status, query, after: cursor },
+        {
+          episodeNumber: 127,
+          group,
+          status,
+          query,
+          after: cursor,
+          sort,
+          direction,
+          review: reviewFilter,
+          groupFolders,
+        },
         controller.signal,
       )
       .then((result) => {
@@ -329,7 +434,18 @@ export function InventoryPanel({ active }: { active: boolean }) {
           setLoading(false);
       });
     return () => controller.abort();
-  }, [active, group, status, query, cursor, revision]);
+  }, [
+    active,
+    group,
+    status,
+    query,
+    cursor,
+    revision,
+    sort,
+    direction,
+    reviewFilter,
+    groupFolders,
+  ]);
   function resetPage() {
     setCursor(null);
     setPrevious([]);
@@ -339,6 +455,15 @@ export function InventoryPanel({ active }: { active: boolean }) {
     setGroup("all");
     resetPage();
   }
+  const pinned =
+    selection &&
+    data &&
+    selection.sourceId === data.sourceId &&
+    selection.episodeId === data.episodeId &&
+    !data.items.some((item) => item.id === selection.record.id)
+      ? selection.record
+      : null;
+  const shownItems = data ? [...data.items, ...(pinned ? [pinned] : [])] : [];
   const count = data?.summary.totalItems;
   const latest = data?.latestReceipt;
   return (
@@ -441,16 +566,10 @@ export function InventoryPanel({ active }: { active: boolean }) {
         )}
         {selectionError && <p role="alert">{selectionError}</p>}
       </div>
-      {selection && (
-        <InventoryLocalPlayer
-          selection={selection}
-          active={active}
-          note={notes[selection.key] ?? ""}
-          onNote={(value) =>
-            setNotes((old) => ({ ...old, [selection.key]: value }))
-          }
-          onClose={() => setSelection(null)}
-        />
+      {reviewNotice && (
+        <p role="status" className="inventory-review-notice">
+          {reviewNotice}
+        </p>
       )}
       <div aria-busy={loading}>
         <div
@@ -615,6 +734,65 @@ export function InventoryPanel({ active }: { active: boolean }) {
               ))}
             </select>
           </label>
+          <label>
+            <span className="sr-only">Sort inventory</span>
+            <select
+              aria-label="Sort inventory"
+              value={sort}
+              onChange={(e) => {
+                setSort(e.target.value as "filename" | "first_observed");
+                resetPage();
+              }}
+            >
+              <option value="filename">Filename</option>
+              <option value="first_observed">First observed</option>
+            </select>
+          </label>
+          <label>
+            <span className="sr-only">Sort direction</span>
+            <select
+              aria-label="Sort direction"
+              value={direction}
+              onChange={(e) => {
+                setDirection(e.target.value as "asc" | "desc");
+                resetPage();
+              }}
+            >
+              <option value="asc">Ascending / oldest first</option>
+              <option value="desc">Descending / newest first</option>
+            </select>
+          </label>
+          <label>
+            <span className="sr-only">Review decision</span>
+            <select
+              aria-label="Review decision"
+              value={reviewFilter}
+              onChange={(e) => {
+                setReviewFilter(
+                  e.target.value as "all" | InventoryReviewStatus,
+                );
+                resetPage();
+              }}
+            >
+              <option value="all">All review decisions</option>
+              {Object.entries(reviewLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="inventory-folder-toggle">
+            <input
+              type="checkbox"
+              checked={groupFolders}
+              onChange={(e) => {
+                setGroupFolders(e.target.checked);
+                resetPage();
+              }}
+            />
+            Group by folder
+          </label>
           {(query || status) && (
             <button
               className="quiet"
@@ -645,36 +823,136 @@ export function InventoryPanel({ active }: { active: boolean }) {
             </span>
           </div>
         )}
-        {loading ? (
+        {loading && (
           <div className="inventory-loading" role="status">
             <RefreshCw className="spin" size={20} />
             Reading stored inventory…
           </div>
-        ) : (
-          data &&
-          (data.items.length ? (
+        )}
+        {data &&
+          (shownItems.length ? (
             <div className="inventory-list">
               <div className="inventory-list-head">
                 <span>RECORD / FILE REFERENCE</span>
                 <span>PROCESSING STATE</span>
-                <span>SOURCE OBSERVED</span>
+                <span>FIRST OBSERVED</span>
               </div>
-              {data.items.map((item) => (
-                <InventoryRecord
-                  key={inventoryScopeKey(
-                    data.sourceId,
-                    data.episodeId,
-                    item.id,
-                  )}
-                  record={item}
-                  localMatch={
-                    matchEpisodeFile(item, files, data.episodeNumber ?? 127)
-                      .state
-                  }
-                  onPlay={() => choose(item)}
-                  onFile={(file, ref) => choose(item, file, ref)}
-                />
-              ))}
+              {shownItems.flatMap((item, index) => {
+                const folder =
+                  item.folder ??
+                  item.variants[0]?.item.media?.ref
+                    .split("/")
+                    .slice(0, -1)
+                    .join("/") ??
+                  "";
+                const key = inventoryScopeKey(
+                  data.sourceId,
+                  data.episodeId,
+                  item.id,
+                );
+                const previous = shownItems[index - 1];
+                const previousFolder =
+                  previous?.folder ??
+                  previous?.variants[0]?.item.media?.ref
+                    .split("/")
+                    .slice(0, -1)
+                    .join("/") ??
+                  "";
+                return [
+                  groupFolders && (index === 0 || previousFolder !== folder) ? (
+                    <h2
+                      className="inventory-folder-heading"
+                      key={"folder:" + key}
+                    >
+                      {folder || "Ungrouped"}
+                      <small> · records on this page</small>
+                    </h2>
+                  ) : null,
+                  <InventoryRecord
+                    key={key}
+                    record={item}
+                    pinned={pinned?.id === item.id}
+                    active={active}
+                    csrfToken={csrfToken}
+                    selection={selection?.key === key ? selection : null}
+                    onClose={() => setSelection(null)}
+                    reviewDraft={reviewDrafts[key]}
+                    onReviewDraft={(draft) =>
+                      setReviewDrafts((old) => {
+                        const next = { ...old };
+                        if (draft) next[key] = draft;
+                        else delete next[key];
+                        return next;
+                      })
+                    }
+                    onReviewSaved={(saved) => {
+                      setSelection((old) =>
+                        old?.key === key
+                          ? { ...old, record: { ...old.record, review: saved } }
+                          : old,
+                      );
+                      setReviewNotice(
+                        `${reviewLabels[saved.effectiveStatus]} saved for ${item.filename ?? item.variants[0]?.item.media?.ref ?? "record"}.`,
+                      );
+                      setData((old) => {
+                        if (
+                          !old ||
+                          old.sourceId !== data.sourceId ||
+                          old.episodeId !== data.episodeId
+                        )
+                          return old;
+                        const exclude =
+                          reviewFilter !== "all" &&
+                          saved.effectiveStatus !== reviewFilter;
+                        return {
+                          ...old,
+                          items: old.items.flatMap((current) => {
+                            if (current.id !== item.id) return [current];
+                            if (exclude) return [];
+                            const changed =
+                              current.review?.version !== saved.version;
+                            return [
+                              {
+                                ...current,
+                                review: {
+                                  ...saved,
+                                  ...(changed
+                                    ? {
+                                        effectiveStatus: "unreviewed" as const,
+                                        changed: true,
+                                        version:
+                                          current.review?.version ??
+                                          saved.version,
+                                      }
+                                    : {}),
+                                },
+                              },
+                            ];
+                          }),
+                          summary: {
+                            ...old.summary,
+                            matchedItems:
+                              old.summary.matchedItems -
+                              (exclude &&
+                              old.items.some(
+                                (current) => current.id === item.id,
+                              )
+                                ? 1
+                                : 0),
+                          },
+                        };
+                      });
+                    }}
+                    onRefresh={() => setRevision((old) => old + 1)}
+                    localMatch={
+                      matchEpisodeFile(item, files, data.episodeNumber ?? 127)
+                        .state
+                    }
+                    onPlay={() => choose(item)}
+                    onFile={(file, ref) => choose(item, file, ref)}
+                  />,
+                ];
+              })}
             </div>
           ) : (
             <div className="inventory-empty">
@@ -696,8 +974,7 @@ export function InventoryPanel({ active }: { active: boolean }) {
                     : "No snapshot has been received for this registered inventory episode. This does not mean the source has no files."}
               </p>
             </div>
-          ))
-        )}
+          ))}
         {data && (previous.length > 0 || data.nextCursor) && (
           <div className="inventory-pagination">
             <button

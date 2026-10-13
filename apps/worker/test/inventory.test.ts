@@ -496,7 +496,8 @@ describe("owner inventory read model", () => {
       { prepare } as unknown as D1Database,
       original.episode.id,
     );
-    expect(prepare).toHaveBeenCalledTimes(4);
+    // One extra bounded query freezes the sort/pagination watermark.
+    expect(prepare).toHaveBeenCalledTimes(5);
     expect(view.items).toHaveLength(20);
     expect(view.summary).toEqual({
       totalItems: 43,

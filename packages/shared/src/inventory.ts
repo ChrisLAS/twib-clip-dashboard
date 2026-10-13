@@ -17,8 +17,40 @@ export const INVENTORY_GROUPS = [
   "attention",
 ] as const;
 export type InventoryGroup = (typeof INVENTORY_GROUPS)[number];
+export type InventoryReviewStatus =
+  "unreviewed" | "approved" | "rejected" | "cut_down";
+export interface InventoryProducerRecord {
+  clip_id: string;
+  clip_uid?: string | null;
+  record_kind: "manual-layout" | "processing-history" | "capture-job";
+  first_seen_at: string | null;
+  source_signature: string | null;
+  parent_clip_id: string | null;
+}
+export interface InventoryReview {
+  status: InventoryReviewStatus;
+  effectiveStatus: InventoryReviewStatus;
+  notes: string;
+  reason: string;
+  revision: number;
+  version: string;
+  changed: boolean;
+  savedAt: string | null;
+}
+export interface InventoryReviewInput {
+  operationId: string;
+  episodeNumber: number;
+  itemId: string;
+  expectedRevision: number;
+  expectedVersion: string;
+  action: "note" | "decision";
+  notes: string;
+  status?: InventoryReviewStatus;
+  reason?: string;
+}
 
 export interface InventorySourceItem {
+  producer_record?: InventoryProducerRecord;
   id: string;
   kind: "candidate" | "media";
   media: null | {
@@ -69,6 +101,13 @@ export interface InventoryReceiptView {
 }
 
 export interface InventoryReadItem {
+  identityConflict?: boolean;
+  folder?: string;
+  filename?: string;
+  firstObservedAt?: string | null;
+  firstReceivedAt?: string | null;
+  producerRecord?: InventoryProducerRecord;
+  review?: InventoryReview;
   id: string;
   readiness: "not_evaluated";
   conflictingLatestObservations: boolean;
@@ -94,6 +133,9 @@ export interface InventoryResponse {
   ingestionPaused: boolean;
   identityCaveat: string;
   filters: {
+    sort?: "identity" | "filename" | "first_observed";
+    direction?: "asc" | "desc";
+    review?: "all" | "unreviewed" | "approved" | "rejected" | "cut_down";
     group: InventoryGroup;
     status: InventoryStatus | null;
     query: string;

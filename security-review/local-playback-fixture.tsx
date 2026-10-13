@@ -156,7 +156,8 @@ void (async () => {
   let error: string | undefined;
   try {
     await until(() => document.querySelector(".inventory-record"));
-    document.querySelector<HTMLElement>(".inventory-record summary")!.click();
+    document.querySelector<HTMLDetailsElement>(".inventory-record")!.open =
+      true;
     check(
       !!document.querySelector("input[webkitdirectory]"),
       "directory selection API present",
@@ -196,12 +197,12 @@ void (async () => {
     await until(() => Math.abs(player()!.currentTime - 1) < 0.1);
     const original = player()!.src;
     const note = document.querySelector<HTMLTextAreaElement>(
-      ".inventory-local-note textarea",
+      ".inventory-review-editor textarea",
     )!;
     Object.getOwnPropertyDescriptor(
       HTMLTextAreaElement.prototype,
       "value",
-    )!.set!.call(note, "Synthetic session draft");
+    )!.set!.call(note, "Synthetic unsaved row draft");
     note.dispatchEvent(new Event("input", { bubbles: true }));
     await sleep(100);
     test.previewReady = true;
@@ -228,8 +229,8 @@ void (async () => {
     );
     check(
       document.querySelector<HTMLTextAreaElement>(
-        ".inventory-local-note textarea",
-      )!.value === "Synthetic session draft",
+        ".inventory-review-editor textarea",
+      )!.value === "Synthetic unsaved row draft",
       "refresh preserves draft",
     );
     fixture.items = [];
@@ -242,13 +243,14 @@ void (async () => {
     check(revoked.includes(original), "changed observation revokes URL");
     check(
       document.querySelector<HTMLTextAreaElement>(
-        ".inventory-local-note textarea",
-      )!.value === "Synthetic session draft",
+        ".inventory-review-editor textarea",
+      )!.value === "Synthetic unsaved row draft",
       "invalidated selection keeps draft",
     );
     media.size_bytes--;
     await refresh();
-    document.querySelector<HTMLElement>(".inventory-record summary")!.click();
+    document.querySelector<HTMLDetailsElement>(".inventory-record")!.open =
+      true;
     button("Play selected local file").click();
     await until(() => (player()?.readyState ?? 0) >= 1);
     Object.defineProperty(player()!, "error", {
@@ -282,7 +284,8 @@ void (async () => {
     await refresh();
     select([file("127/new-review/tone.mp3")]);
     await sleep(100);
-    document.querySelector<HTMLElement>(".inventory-record summary")!.click();
+    document.querySelector<HTMLDetailsElement>(".inventory-record")!.open =
+      true;
     button("Play selected local file").click();
     await until(
       () =>

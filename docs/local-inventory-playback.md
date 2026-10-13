@@ -1,5 +1,9 @@
 # Explicit local inventory playback
 
+This document describes the historical playback-only base. The current review
+candidate adds persistent notes, row decisions and an unapplied database
+migration; see [Inventory row review](inventory-row-review.md).
+
 This update is stacked on the media-first inventory view at04ca4d3. Deploy its
 PR3 grouped inventory-read API with the frontend; assets alone cannot use the
 earlier response without groupCounts. No database migration, credential change,

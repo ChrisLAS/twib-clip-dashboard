@@ -726,6 +726,7 @@ function App() {
           </div>
         )}
         <InventoryPanel
+          csrfToken={session?.csrfToken}
           active={
             !clip && workspaceView === "inventory" && (!!session || !!demo)
           }
