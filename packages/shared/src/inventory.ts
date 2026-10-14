@@ -27,7 +27,42 @@ export interface InventoryProducerRecord {
   source_signature: string | null;
   parent_clip_id: string | null;
 }
+export interface InventoryCutRequest {
+  requestId: string;
+  parentItemId: string;
+  parentVersion: string;
+  reviewRevision: number;
+  state: string;
+  code: string | null;
+  spec: NonNullable<InventoryReviewInput["cutSpec"]>;
+  parent: {
+    item_id: string;
+    clip_id: string | null;
+    clip_uid: string | null;
+    ref: string;
+    sha256: string | null;
+    size_bytes: number;
+    modified_at: string | null;
+  };
+  derivative: {
+    clip_id: string;
+    parent_clip_id: string;
+    source_long_clip_id: string | null;
+    ref: string;
+    sha256: string;
+    source_sha256: string;
+    size_bytes: number;
+    duration_seconds: number;
+    local_in_seconds: number;
+    local_out_seconds: number;
+    ready: false;
+    approval: "unreviewed";
+  } | null;
+}
 export interface InventoryReview {
+  cutRequestId?: string;
+  cutRequest?: InventoryCutRequest;
+  cutQueueError?: string;
   status: InventoryReviewStatus;
   effectiveStatus: InventoryReviewStatus;
   notes: string;
@@ -38,6 +73,9 @@ export interface InventoryReview {
   savedAt: string | null;
 }
 export interface InventoryReviewInput {
+  cutSpec?:
+    | { kind: "range"; startSeconds: number; endSeconds: number }
+    | { kind: "editorial"; guidance: string; startSeconds?: number };
   operationId: string;
   episodeNumber: number;
   itemId: string;
@@ -101,6 +139,7 @@ export interface InventoryReceiptView {
 }
 
 export interface InventoryReadItem {
+  cutRequests?: InventoryCutRequest[];
   identityConflict?: boolean;
   folder?: string;
   filename?: string;
@@ -124,6 +163,8 @@ export interface InventoryReadItem {
 }
 
 export interface InventoryResponse {
+  cutRequestsEnabled?: boolean;
+  cutExecutionEnabled?: boolean;
   sourceId: string;
   episodeId: string;
   episodeNumber: number | null;

@@ -44,6 +44,7 @@ import {
 type RecordItem = InventoryResponse["items"][number];
 function InventoryRecord({
   record,
+  cutRequestsEnabled,
   onPlay,
   onFile,
   localMatch,
@@ -58,6 +59,7 @@ function InventoryRecord({
   onRefresh,
 }: {
   record: RecordItem;
+  cutRequestsEnabled?: boolean;
   onPlay: () => void;
   onFile: (file: File, confirmedRef: string) => void;
   localMatch: string;
@@ -295,6 +297,7 @@ function InventoryRecord({
           )}
           <InventoryReviewEditor
             record={record}
+            cutRequestsEnabled={cutRequestsEnabled}
             csrfToken={csrfToken}
             draft={reviewDraft}
             onDraft={onReviewDraft}
@@ -872,6 +875,7 @@ export function InventoryPanel({
                   <InventoryRecord
                     key={key}
                     record={item}
+                    cutRequestsEnabled={data.cutRequestsEnabled}
                     pinned={pinned?.id === item.id}
                     active={active}
                     csrfToken={csrfToken}

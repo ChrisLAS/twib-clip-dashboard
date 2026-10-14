@@ -1,3 +1,4 @@
+import { cutSpecSchema, preparedCut, cutInsert } from "../capture-jobs/cut";
 import { z } from "zod";
 import type { InventoryReview, InventoryReviewInput } from "@twib/shared";
 import { HttpError } from "../errors";
@@ -24,9 +25,15 @@ const schema = z
     notes: z.string().max(4000),
     status: z.enum(statuses).optional(),
     reason: z.string().max(2000).optional(),
+    cutSpec: cutSpecSchema.optional(),
   })
   .strict()
   .superRefine((v, ctx) => {
+    if (v.cutSpec && (v.action !== "decision" || v.status !== "cut_down"))
+      ctx.addIssue({
+        code: "custom",
+        message: "Cut instructions require an explicit cut-down decision.",
+      });
     if (v.action === "decision" && v.status === undefined)
       ctx.addIssue({ code: "custom", message: "Choose an explicit decision." });
     if (
@@ -238,8 +245,12 @@ export async function saveInventoryReview(
     version_basis: basis,
     saved_at: new Date(now).toISOString(),
   };
+  const cut = preparedCut(input, item, owner, now);
   const response = reviewView(next, version),
-    encoded = JSON.stringify(response);
+    encoded = JSON.stringify({
+      ...response,
+      ...(cut ? { cutRequestId: cut.id } : {}),
+    });
   await db.batch([
     db
       .prepare(
@@ -294,6 +305,7 @@ export async function saveInventoryReview(
         encoded,
         input.expectedRevision,
       ),
+    ...(cut ? [cutInsert(db, cut, requestHash, encoded)] : []),
   ]);
   const committed = await db
     .prepare(

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type {
   InventoryReadItem,
   InventoryReview,
@@ -7,6 +7,12 @@ import type {
 import { api } from "./api";
 
 export interface InventoryReviewDraft {
+  operationId?: string;
+  operationPayload?: string;
+  cutMode?: "none" | "range" | "editorial";
+  cutStart?: string;
+  cutEnd?: string;
+  cutGuidance?: string;
   notes: string;
   reason: string;
   status?: InventoryReviewStatus;
@@ -21,6 +27,7 @@ export const reviewLabels: Record<InventoryReviewStatus, string> = {
 };
 export function InventoryReviewEditor({
   record,
+  cutRequestsEnabled = false,
   csrfToken,
   draft,
   onDraft,
@@ -28,6 +35,7 @@ export function InventoryReviewEditor({
   onRefresh,
 }: {
   record: InventoryReadItem;
+  cutRequestsEnabled?: boolean;
   csrfToken?: string;
   draft?: InventoryReviewDraft;
   onDraft: (draft: InventoryReviewDraft | null) => void;
@@ -36,6 +44,7 @@ export function InventoryReviewEditor({
 }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const operation = useRef<{ payload: string; id: string } | null>(null);
   const saved = record.review;
   const value = draft ?? {
     notes: saved?.notes ?? "",
@@ -72,19 +81,73 @@ export function InventoryReviewEditor({
     setBusy(true);
     setError("");
     try {
+      const cutSpec =
+        status === "cut_down" &&
+        cutRequestsEnabled &&
+        value.cutMode &&
+        value.cutMode !== "none"
+          ? value.cutMode === "range"
+            ? {
+                kind: "range" as const,
+                startSeconds: Number(value.cutStart),
+                endSeconds: Number(value.cutEnd),
+              }
+            : {
+                kind: "editorial" as const,
+                guidance: value.cutGuidance ?? "",
+                ...(value.cutStart?.trim()
+                  ? { startSeconds: Number(value.cutStart) }
+                  : {}),
+              }
+          : undefined;
+      if (
+        cutSpec?.kind === "range" &&
+        (!value.cutStart?.trim() ||
+          !value.cutEnd?.trim() ||
+          !Number.isFinite(cutSpec.startSeconds) ||
+          !Number.isFinite(cutSpec.endSeconds) ||
+          cutSpec.endSeconds <= cutSpec.startSeconds ||
+          cutSpec.endSeconds - cutSpec.startSeconds > 180)
+      ) {
+        setError(
+          "Enter start and end seconds for a positive range of at most 180 seconds.",
+        );
+        return;
+      }
+      if (cutSpec?.kind === "editorial" && !cutSpec.guidance.trim()) {
+        setError("Enter the editorial guidance to save this request.");
+        return;
+      }
+      const payload = {
+        episodeNumber: 127,
+        itemId: record.id,
+        expectedRevision: value.revision,
+        expectedVersion: value.version,
+        action: status ? ("decision" as const) : ("note" as const),
+        notes: value.notes,
+        ...(status ? { status, reason: value.reason } : {}),
+        ...(cutSpec ? { cutSpec } : {}),
+      };
+      const fingerprint = JSON.stringify(payload);
+      if (operation.current?.payload !== fingerprint)
+        operation.current = {
+          payload: fingerprint,
+          id:
+            value.operationPayload === fingerprint && value.operationId
+              ? value.operationId
+              : crypto.randomUUID(),
+        };
+      onDraft({
+        ...value,
+        ...(status ? { status } : {}),
+        operationId: operation.current.id,
+        operationPayload: fingerprint,
+      });
       const response = await api.inventoryReview(
-        {
-          operationId: crypto.randomUUID(),
-          episodeNumber: 127,
-          itemId: record.id,
-          expectedRevision: value.revision,
-          expectedVersion: value.version,
-          action: status ? "decision" : "note",
-          notes: value.notes,
-          ...(status ? { status, reason: value.reason } : {}),
-        },
+        { ...payload, operationId: operation.current.id },
         csrfToken,
       );
+      operation.current = null;
       onDraft(null);
       onSaved(response);
     } catch {
@@ -156,6 +219,105 @@ export function InventoryReviewEditor({
           placeholder="Why reject, cut down, or approve an unusually strong long clip?"
         />
       </label>
+      {cutRequestsEnabled && (
+        <fieldset disabled={busy}>
+          <legend>Cut instructions</legend>
+          <label>
+            Request type
+            <select
+              value={value.cutMode ?? "none"}
+              onChange={(e) =>
+                onDraft({
+                  ...value,
+                  cutMode: e.target.value as "none" | "range" | "editorial",
+                })
+              }
+            >
+              <option value="none">Decision only</option>
+              <option value="range">Explicit range</option>
+              <option value="editorial">Editorial guidance</option>
+            </select>
+          </label>
+          {value.cutMode && value.cutMode !== "none" && (
+            <label>
+              Start seconds
+              <input
+                type="number"
+                min="0"
+                step="0.001"
+                value={value.cutStart ?? ""}
+                onChange={(e) =>
+                  onDraft({ ...value, cutStart: e.target.value })
+                }
+              />
+            </label>
+          )}
+          {value.cutMode === "range" && (
+            <label>
+              End seconds
+              <input
+                type="number"
+                min="0"
+                step="0.001"
+                value={value.cutEnd ?? ""}
+                onChange={(e) => onDraft({ ...value, cutEnd: e.target.value })}
+              />
+            </label>
+          )}
+          {value.cutMode === "editorial" && (
+            <label>
+              Editorial guidance
+              <textarea
+                maxLength={2000}
+                value={value.cutGuidance ?? ""}
+                onChange={(e) =>
+                  onDraft({ ...value, cutGuidance: e.target.value })
+                }
+              />
+            </label>
+          )}
+          <p>
+            Save with Cut down. Preserve complete thoughts and qualifications.
+            Editorial requests need review before execution.
+          </p>
+        </fieldset>
+      )}
+      {[
+        ...new Map(
+          [
+            ...(record.cutRequests ?? []),
+            ...(saved?.cutRequest ? [saved.cutRequest] : []),
+          ].map((cut) => [cut.requestId, cut]),
+        ).values(),
+      ].map((cut) => (
+        <section key={cut.requestId} aria-label="Saved cut request">
+          <p>
+            Cut request: {cut.state}
+            {cut.code ? ` · ${cut.code}` : ""}
+          </p>
+          <p>
+            Source: {cut.parent.ref} ·{" "}
+            {cut.parent.clip_id ?? cut.parent.clip_uid ?? cut.parentItemId}
+          </p>
+          <p>
+            {cut.spec.kind === "range"
+              ? `${cut.spec.startSeconds}–${cut.spec.endSeconds} seconds`
+              : cut.spec.guidance}
+          </p>
+          {cut.derivative && (
+            <p>
+              Derivative: {cut.derivative.ref} ·{" "}
+              {cut.derivative.duration_seconds} seconds · Unreviewed · SHA-256{" "}
+              {cut.derivative.sha256}
+            </p>
+          )}
+        </section>
+      ))}
+      {saved?.cutQueueError && (
+        <p role="status">
+          Instructions saved; execution was not queued: {saved.cutQueueError}
+        </p>
+      )}
       <p className="muted">
         Finished clips should usually be three minutes or less. Explain approval
         when duration is longer or unknown. A saved decision applies to this
@@ -220,12 +382,14 @@ export function InventoryReviewEditor({
         </button>
       )}
       {(saved?.effectiveStatus === "rejected" ||
-        saved?.effectiveStatus === "cut_down") && (
-        <p className="muted">
-          Decision saved only. No file has been moved or cut; Nomad actions are
-          not enabled.
-        </p>
-      )}
+        saved?.effectiveStatus === "cut_down") &&
+        !saved?.cutRequest &&
+        !record.cutRequests?.length && (
+          <p className="muted">
+            Decision saved only. No file has been moved or cut; Nomad actions
+            are not enabled.
+          </p>
+        )}
       {saved?.savedAt && (
         <p className="muted">
           Saved {new Date(saved.savedAt).toLocaleString()} · revision{" "}

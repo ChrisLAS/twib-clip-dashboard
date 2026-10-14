@@ -1,5 +1,20 @@
 export interface Env {
   DB: D1Database;
+  CAPTURE_JOBS_ENABLED?: string;
+  CAPTURE_JOBS_APP_ORIGIN?: string;
+  CAPTURE_JOBS_ACCESS_TEAM_DOMAIN?: string;
+  CAPTURE_JOBS_ACCESS_AUD?: string;
+  CAPTURE_JOBS_ACCESS_CLIENT_ID?: string;
+  CAPTURE_JOBS_REUSE_INVENTORY_IDENTITY?: string;
+  CAPTURE_JOBS_GRANT_SOURCE_ID?: string;
+  CAPTURE_JOBS_GRANT_SHOW?: string;
+  CAPTURE_JOBS_GRANT_EPISODE?: string;
+  CAPTURE_JOBS_GRANT_SCOPES?: string;
+  CAPTURE_JOBS_GRANT_STARTS_AT?: string;
+  CAPTURE_JOBS_GRANT_EXPIRES_AT?: string;
+  CUT_REQUESTS_ENABLED?: string;
+  CUT_JOBS_ENABLED?: string;
+  CAPTURE_JOBS_GRANT_OPERATIONS?: string;
   // Private activation config only; intentionally absent from tracked wrangler vars.
   INVENTORY_INGEST_ENABLED?: string;
   INVENTORY_APP_ORIGIN?: string;
