@@ -1,3 +1,15 @@
+import { requireKind } from "./capture-jobs/scope";
+import {
+  cutsEnabled,
+  executionEnabled,
+  attachCuts,
+  enqueueCut,
+  retryCut,
+  readCut,
+  cutView,
+} from "./capture-jobs/cut";
+import { machineJobs, requireJobsEnabled, jobBody } from "./capture-jobs/http";
+import { createJob, listJobs, retryJob } from "./capture-jobs/store";
 import { ingestInventory } from "./inventory/http";
 import { inventoryEpisodeSelection, listInventory } from "./inventory/store";
 import { saveInventoryReview } from "./inventory/review";
@@ -132,6 +144,34 @@ export default {
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
+      if (new URL(request.url).pathname.startsWith("/api/v1/capture-jobs/"))
+        return await machineJobs(request, env);
+      if (new URL(request.url).pathname.startsWith("/api/capture-jobs")) {
+        requireJobsEnabled(env);
+        if (isDemo(request, env))
+          throw new HttpError(
+            403,
+            "OWNER_REQUIRED",
+            "Demo cannot operate capture jobs.",
+          );
+        requireKind(env, "capture");
+      }
+      if (
+        new URL(request.url).pathname.startsWith("/api/inventory/cut-requests/")
+      ) {
+        if (!executionEnabled(env))
+          throw new HttpError(
+            503,
+            "CUT_JOBS_DISABLED",
+            "Cut execution is not activated.",
+          );
+        if (isDemo(request, env))
+          throw new HttpError(
+            403,
+            "OWNER_REQUIRED",
+            "An owner session is required.",
+          );
+      }
       // Separate machine adapter; owner authentication and demo bypass never
       // authorize inventory writes. Missing private configuration stays closed.
       if (/^\/api\/v[12]\/number-one\//.test(new URL(request.url).pathname))
@@ -144,7 +184,30 @@ export default {
       const method = request.method;
       if (method === "POST") await guardMutation(request, env, owner);
       let result: Response;
-      if (path === "/api/session" && method === "GET")
+      if (
+        /^\/api\/inventory\/cut-requests\/[0-9a-f-]{36}\/(queue|retry)$/.test(
+          path,
+        ) &&
+        method === "POST"
+      ) {
+        const id = path.split("/")[4];
+        result = json(
+          path.endsWith("/retry")
+            ? await retryCut(env.DB, id, await body(request), owner)
+            : await enqueueCut(env.DB, id, owner),
+        );
+      } else if (path === "/api/capture-jobs" && method === "POST")
+        result = json(await createJob(env.DB, await jobBody(request), owner));
+      else if (path === "/api/capture-jobs" && method === "GET")
+        result = json(await listJobs(env.DB));
+      else if (
+        /^\/api\/capture-jobs\/[0-9a-f-]{36}\/retry$/.test(path) &&
+        method === "POST"
+      )
+        result = json(
+          await retryJob(env.DB, path.split("/")[3], await jobBody(request)),
+        );
+      else if (path === "/api/session" && method === "GET")
         result = json({
           owner,
           csrfToken: await csrfToken(owner, env, demo),
@@ -157,29 +220,63 @@ export default {
         });
       else if (path === "/api/inventory" && method === "GET") {
         const selection = await inventoryEpisodeSelection(url.searchParams);
-        result = json(
-          await listInventory(
-            env.DB,
-            selection.episodeId,
-            url.searchParams.get("after"),
-            {
-              episodeNumber: selection.episodeNumber,
-              group: url.searchParams.get("group"),
-              status: url.searchParams.get("status"),
-              query: url.searchParams.get("q"),
-              sort: url.searchParams.get("sort"),
-              direction: url.searchParams.get("direction"),
-              review: url.searchParams.get("review"),
-              groupFolders: url.searchParams.get("groupFolders") === "true",
-              ingestionEnabled: env.INVENTORY_INGEST_ENABLED === "true",
-            },
-          ),
+        const inventory = await listInventory(
+          env.DB,
+          selection.episodeId,
+          url.searchParams.get("after"),
+          {
+            episodeNumber: selection.episodeNumber,
+            group: url.searchParams.get("group"),
+            status: url.searchParams.get("status"),
+            query: url.searchParams.get("q"),
+            sort: url.searchParams.get("sort"),
+            direction: url.searchParams.get("direction"),
+            review: url.searchParams.get("review"),
+            groupFolders: url.searchParams.get("groupFolders") === "true",
+            ingestionEnabled: env.INVENTORY_INGEST_ENABLED === "true",
+          },
         );
-      } else if (path === "/api/inventory/review" && method === "POST")
-        result = json(
-          await saveInventoryReview(env.DB, await body(request, 24000), owner),
-        );
-      else if (path === "/api/publication" && method === "GET")
+        if (cutsEnabled(env) && !demo) {
+          const cuts = await attachCuts(env.DB, inventory.items);
+          for (const item of inventory.items)
+            item.cutRequests = cuts.filter((c) => c.parentItemId === item.id);
+        }
+        result = json({
+          ...inventory,
+          cutRequestsEnabled: cutsEnabled(env) && !demo,
+          cutExecutionEnabled: executionEnabled(env) && !demo,
+        });
+      } else if (path === "/api/inventory/review" && method === "POST") {
+        const input = await body(request, 24000);
+        if (
+          input &&
+          typeof input === "object" &&
+          "cutSpec" in input &&
+          (!cutsEnabled(env) || demo)
+        )
+          throw new HttpError(
+            503,
+            "CUT_REQUESTS_DISABLED",
+            "Structured cut requests are not activated.",
+          );
+        const review = await saveInventoryReview(env.DB, input, owner);
+        if (review.cutRequestId) {
+          if (executionEnabled(env)) {
+            const cut = await readCut(env.DB, review.cutRequestId);
+            if (cut && cutView(cut).spec.kind === "range") {
+              try {
+                await enqueueCut(env.DB, review.cutRequestId, owner);
+              } catch (error) {
+                if (!(error instanceof HttpError)) throw error;
+                review.cutQueueError = error.code;
+              }
+            }
+          }
+          const cut = await readCut(env.DB, review.cutRequestId);
+          if (cut) review.cutRequest = cutView(cut);
+        }
+        result = json(review);
+      } else if (path === "/api/publication" && method === "GET")
         result = json(await publicationStatus(env));
       else if (path === "/api/publication/sync" && method === "POST") {
         z.object({})

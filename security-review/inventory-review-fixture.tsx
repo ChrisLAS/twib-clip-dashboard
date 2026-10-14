@@ -60,6 +60,8 @@ const record = {
   ],
 };
 const fixture = {
+  cutRequestsEnabled: true,
+  cutExecutionEnabled: false,
   sourceId: "nomad:number-one",
   episodeId,
   episodeNumber: 127,
@@ -129,6 +131,26 @@ api.inventoryReview = async (body, csrf) => {
     review.reason = body.reason ?? "";
     review.changed = false;
   }
+  if (body.cutSpec)
+    review.cutRequest = {
+      requestId: body.operationId,
+      parentItemId: id,
+      parentVersion: review.version,
+      reviewRevision: review.revision,
+      state: body.cutSpec.kind === "range" ? "requested" : "needs_review",
+      code: null,
+      spec: body.cutSpec,
+      parent: {
+        item_id: id,
+        clip_id: "native-parent",
+        clip_uid: null,
+        ref,
+        sha256: "a".repeat(64),
+        size_bytes: bytes.length,
+        modified_at: null,
+      },
+      derivative: null,
+    };
   return structuredClone(review);
 };
 let remount: () => void;
@@ -487,6 +509,66 @@ void (async () => {
       review.reason === "No useful complete point",
       "rejection persists explanation without host action",
     );
+    await refresh();
+    await sleep(150);
+    const mode = document.querySelector<HTMLSelectElement>(
+      ".inventory-review-editor fieldset select",
+    )!;
+    mode.value = "range";
+    mode.dispatchEvent(new Event("change", { bubbles: true }));
+    await sleep(80);
+    const range = document.querySelectorAll<HTMLInputElement>(
+      ".inventory-review-editor fieldset input",
+    );
+    for (const [input, value] of [
+      [range[0], "0.5"],
+      [range[1], "2.5"],
+    ] as const) {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await sleep(80);
+    }
+    await sleep(80);
+    button("Cut down").click();
+    await until(() => review.cutRequest?.spec.kind === "range");
+    check(
+      review.cutRequest?.spec.kind === "range" &&
+        review.cutRequest.spec.startSeconds === 0.5 &&
+        review.cutRequest.spec.endSeconds === 2.5,
+      "explicit range saved once with structured boundaries",
+    );
+    await until(() =>
+      document
+        .querySelector('[aria-label="Saved cut request"]')
+        ?.textContent?.includes("requested"),
+    );
+    check(
+      document
+        .querySelector('[aria-label="Saved cut request"]')
+        ?.textContent?.includes("requested"),
+      "disabled execution truthfully displays saved request",
+    );
+    mode.value = "editorial";
+    mode.dispatchEvent(new Event("change", { bubbles: true }));
+    await sleep(80);
+    edit("Keep the qualification and full thought", 2);
+    await sleep(80);
+    button("Cut down").click();
+    await until(() => review.cutRequest?.spec.kind === "editorial");
+    await until(() =>
+      document
+        .querySelector('[aria-label="Saved cut request"]')
+        ?.textContent?.includes("needs_review"),
+    );
+    check(
+      document
+        .querySelector('[aria-label="Saved cut request"]')
+        ?.textContent?.includes("needs_review"),
+      "editorial guidance stays in review and newest saved request is visible",
+    );
     button("Release selected local files").click();
     await sleep(80);
     const select = document.querySelector<HTMLSelectElement>(
@@ -500,7 +582,21 @@ void (async () => {
       "Unreviewed filter is sent to server",
     );
   } catch (e) {
-    error = String(e);
+    error =
+      String(e) +
+      " alert=" +
+      document.querySelector('.inventory-review-editor [role="alert"]')
+        ?.textContent +
+      " disabled=" +
+      button("Cut down").disabled +
+      " fields=" +
+      [
+        ...document.querySelectorAll<HTMLInputElement>(
+          ".inventory-review-editor fieldset input",
+        ),
+      ]
+        .map((x) => x.value)
+        .join(",");
   }
   const result = {
     browser: navigator.userAgent,

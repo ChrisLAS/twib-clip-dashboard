@@ -1,3 +1,4 @@
+import { enqueueCut, retryCut, readCut } from "../src/capture-jobs/cut";
 import { afterEach, beforeEach, beforeAll, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
@@ -41,7 +42,9 @@ beforeEach(() => {
   sequence = 0;
   for (const name of [
     "0011_number_one_inventory.sql",
+    "0012_capture_jobs.sql",
     "0013_inventory_review.sql",
+    "0014_inventory_cut_requests.sql",
   ])
     sqlite.exec(
       readFileSync(new URL("../migrations/" + name, import.meta.url), "utf8"),
@@ -517,4 +520,152 @@ it("new owner mutation rejects missing/service auth and requires exact origin pl
       })
     ).status,
   ).toBe(200);
+});
+
+async function queuedCut() {
+  const item = media(1, "fixture.mp4");
+  item.producer_record = {
+    clip_id: "fixture-parent",
+    record_kind: "processing-history",
+    first_seen_at: null,
+    source_signature: null,
+    parent_clip_id: null,
+  };
+  await accept([item]);
+  const review = await save(item, "cut_down", 0, {
+    cutSpec: { kind: "range", startSeconds: 2, endSeconds: 20 },
+  });
+  const id = review.cutRequestId!;
+  expect(id).toBeTruthy();
+  await enqueueCut(db, id, "synthetic-owner", now);
+  sqlite
+    .prepare(
+      "UPDATE capture_jobs SET state='needs_review',code='CUT_FAILED_FIXTURE' WHERE job_id=?",
+    )
+    .run(id);
+  return { item, id };
+}
+it("structured range persists and eligible retry queues once with immutable instructions", async () => {
+  const { id } = await queuedCut();
+  const request = { retry_id: crypto.randomUUID() };
+  await retryCut(db, id, request, "synthetic-owner", now);
+  await retryCut(db, id, request, "synthetic-owner", now);
+  expect(
+    sqlite.prepare("SELECT count(*) n FROM capture_job_retries").get()?.n,
+  ).toBe(1);
+  expect((await readCut(db, id))?.state).toBe("queued");
+});
+it("retry rejects a changed source version", async () => {
+  const { id, item } = await queuedCut();
+  item.media!.size_bytes = item.media!.size_bytes! + 1;
+  await accept([item]);
+  await expect(
+    retryCut(db, id, { retry_id: crypto.randomUUID() }, "synthetic-owner", now),
+  ).rejects.toMatchObject({ code: "CUT_REQUEST_CONFLICT" });
+  expect(
+    sqlite.prepare("SELECT count(*) n FROM capture_job_retries").get()?.n,
+  ).toBe(0);
+});
+it("retry rejects a superseding review decision", async () => {
+  const { id, item } = await queuedCut();
+  await save(item, "rejected", 1);
+  await expect(
+    retryCut(db, id, { retry_id: crypto.randomUUID() }, "synthetic-owner", now),
+  ).rejects.toMatchObject({ code: "CUT_REQUEST_CONFLICT" });
+});
+it("retry rejects duplicate current native identity", async () => {
+  const { id, item } = await queuedCut();
+  const duplicate = media(2, "duplicate.mp4");
+  duplicate.producer_record = item.producer_record;
+  await accept([item, duplicate]);
+  await expect(
+    retryCut(db, id, { retry_id: crypto.randomUUID() }, "synthetic-owner", now),
+  ).rejects.toMatchObject({ code: "INVENTORY_REVIEW_IDENTITY_CONFLICT" });
+});
+it("editorial instructions persist without a runnable job", async () => {
+  const item = media(1, "fixture.mp4");
+  await accept([item]);
+  const review = await save(item, "cut_down", 0, {
+    cutSpec: {
+      kind: "editorial",
+      guidance: "Preserve the complete qualification",
+      startSeconds: 5,
+    },
+  });
+  expect((await readCut(db, review.cutRequestId!))?.state).toBe("needs_review");
+  expect(sqlite.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(
+    0,
+  );
+});
+
+it("retry atomically rejects derivative attachment after preflight", async () => {
+  const { id } = await queuedCut();
+  const raced = {
+    ...db,
+    batch: async (statements: D1PreparedStatement[]) => {
+      sqlite
+        .prepare(
+          "UPDATE inventory_cut_requests SET derivative_json='{}' WHERE request_id=?",
+        )
+        .run(id);
+      return db.batch(statements);
+    },
+  } as D1Database;
+  await expect(
+    retryCut(
+      raced,
+      id,
+      { retry_id: crypto.randomUUID() },
+      "synthetic-owner",
+      now,
+    ),
+  ).rejects.toMatchObject({ code: "JOB_CONFLICT" });
+  expect(
+    sqlite.prepare("SELECT state FROM capture_jobs WHERE job_id=?").get(id)
+      ?.state,
+  ).toBe("needs_review");
+  expect(
+    sqlite.prepare("SELECT count(*) n FROM capture_job_retries").get()?.n,
+  ).toBe(0);
+});
+it("retry atomically rejects a review changed after preflight", async () => {
+  const { id } = await queuedCut();
+  const raced = {
+    ...db,
+    batch: async (statements: D1PreparedStatement[]) => {
+      sqlite.exec(
+        "UPDATE inventory_reviews SET revision=revision+1,status='rejected'",
+      );
+      return db.batch(statements);
+    },
+  } as D1Database;
+  await expect(
+    retryCut(
+      raced,
+      id,
+      { retry_id: crypto.randomUUID() },
+      "synthetic-owner",
+      now,
+    ),
+  ).rejects.toMatchObject({ code: "JOB_CONFLICT" });
+  expect(
+    sqlite.prepare("SELECT state FROM capture_jobs WHERE job_id=?").get(id)
+      ?.state,
+  ).toBe("needs_review");
+});
+it("generic transport retry cannot bypass cut eligibility", async () => {
+  const { id } = await queuedCut();
+  const { retryJob } = await import("../src/capture-jobs/store");
+  await expect(
+    retryJob(db, id, { retry_id: crypto.randomUUID() }, now),
+  ).rejects.toMatchObject({ code: "JOB_CONFLICT" });
+});
+
+it("claim UUID is bound to its capture or cut capability even for an empty receipt", async () => {
+  const { claimJob } = await import("../src/capture-jobs/store");
+  const request_id = crypto.randomUUID();
+  expect((await claimJob(db, { request_id }, now)).claim).toBeNull();
+  await expect(
+    claimJob(db, { request_id, job_kind: "cut" }, now),
+  ).rejects.toMatchObject({ code: "JOB_CONFLICT" });
 });
