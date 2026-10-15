@@ -1,3 +1,5 @@
+import { batchSizeIssue } from "./inventory-batch";
+import { InventoryCutStatus } from "./inventory-cut-status";
 import { useRef, useState } from "react";
 import type {
   InventoryReadItem,
@@ -33,6 +35,7 @@ export function InventoryReviewEditor({
   onDraft,
   onSaved,
   onRefresh,
+  onFindDerivative,
 }: {
   record: InventoryReadItem;
   cutRequestsEnabled?: boolean;
@@ -41,6 +44,7 @@ export function InventoryReviewEditor({
   onDraft: (draft: InventoryReviewDraft | null) => void;
   onSaved: (review: InventoryReview) => void;
   onRefresh: () => void;
+  onFindDerivative?: (ref: string) => void;
 }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -219,6 +223,7 @@ export function InventoryReviewEditor({
           placeholder="Why reject, cut down, or approve an unusually strong long clip?"
         />
       </label>
+      {batchSizeIssue(record) && <p role="status">{batchSizeIssue(record)}</p>}
       {cutRequestsEnabled && (
         <fieldset disabled={busy}>
           <legend>Cut instructions</legend>
@@ -290,28 +295,11 @@ export function InventoryReviewEditor({
           ].map((cut) => [cut.requestId, cut]),
         ).values(),
       ].map((cut) => (
-        <section key={cut.requestId} aria-label="Saved cut request">
-          <p>
-            Cut request: {cut.state}
-            {cut.code ? ` · ${cut.code}` : ""}
-          </p>
-          <p>
-            Source: {cut.parent.ref} ·{" "}
-            {cut.parent.clip_id ?? cut.parent.clip_uid ?? cut.parentItemId}
-          </p>
-          <p>
-            {cut.spec.kind === "range"
-              ? `${cut.spec.startSeconds}–${cut.spec.endSeconds} seconds`
-              : cut.spec.guidance}
-          </p>
-          {cut.derivative && (
-            <p>
-              Derivative: {cut.derivative.ref} ·{" "}
-              {cut.derivative.duration_seconds} seconds · Unreviewed · SHA-256{" "}
-              {cut.derivative.sha256}
-            </p>
-          )}
-        </section>
+        <InventoryCutStatus
+          key={cut.requestId}
+          cut={cut}
+          onFindDerivative={onFindDerivative}
+        />
       ))}
       {saved?.cutQueueError && (
         <p role="status">
@@ -386,8 +374,8 @@ export function InventoryReviewEditor({
         !saved?.cutRequest &&
         !record.cutRequests?.length && (
           <p className="muted">
-            Decision saved only. No file has been moved or cut; Nomad actions
-            are not enabled.
+            Decision saved only. No file has been moved or cut by this decision;
+            it has no structured cut request and does not start a new job.
           </p>
         )}
       {saved?.savedAt && (

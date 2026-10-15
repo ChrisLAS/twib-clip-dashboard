@@ -71,7 +71,8 @@ const html =
 await writeFile(join(root, "index.html"), html);
 await mkdir("test-results", { recursive: true });
 const chrome = await chromium.launch({
-  executablePath: "/run/current-system/sw/bin/google-chrome",
+  executablePath:
+    process.env.CHROMIUM_PATH ?? "/run/current-system/sw/bin/google-chrome",
   headless: true,
   args: ["--no-sandbox", "--disable-background-networking"],
 });
@@ -125,7 +126,7 @@ await writeFile(
   ].join("\n"),
 );
 const firefox = spawn(
-  "/run/current-system/sw/bin/firefox",
+  process.env.FIREFOX_PATH ?? "/run/current-system/sw/bin/firefox",
   [
     "--headless",
     "--no-remote",

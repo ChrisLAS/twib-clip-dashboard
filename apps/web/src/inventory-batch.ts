@@ -5,9 +5,15 @@ export interface BatchInstructions {
   start: string;
   end: string;
 }
+export function batchSizeIssue(record: InventoryReadItem): string | null {
+  return (record.variants[0]?.item.media?.size_bytes ?? 0) > 512 * 1024 * 1024
+    ? "Source exceeds the 512 MiB cut-job limit. Choose a smaller source; the original is unchanged."
+    : null;
+}
 export function batchEligible(record: InventoryReadItem) {
   const media = record.variants[0]?.item.media;
   return (
+    !batchSizeIssue(record) &&
     !!record.review &&
     !record.identityConflict &&
     !record.conflictingLatestObservations &&
@@ -35,6 +41,7 @@ export function batchPayload(
   instruction: BatchInstructions,
   operationId: string,
 ): InventoryReviewInput {
+  if (batchSizeIssue(record)) throw new Error(batchSizeIssue(record)!);
   if (!batchEligible(record) || !record.review)
     throw new Error(
       "Select an unchanged, uniquely identified clip longer than 5 minutes.",

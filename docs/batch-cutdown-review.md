@@ -20,3 +20,11 @@ This slice builds on draft PR 6, exact base `5f1ac28`. It is not deployed or act
 The existing `npm ci` lockfile reports six dependency advisories (one moderate, three high, two critical). No dependency changes are included in this slice. Assess separately before rollout rather than applying an unreviewed broad dependency update.
 
 `CHROMIUM_PATH=<installed Nix Chrome> node security-review/inventory-batch-durability.mjs` additionally verifies lost acknowledgements after server commit, reload during a batch, exact operation replay without duplicate effects, unsent retention, saved skipping, storage quota/denial/corruption/owner mismatch and account isolation on desktop/mobile.
+
+## Combined planning and review status UI
+
+The inventory response independently reports request, planning, explicit-range execution and automatic first-pass gates. The UI does not infer any enabled gate or completion from another one. Initial save receipts are labelled acknowledgements; refresh obtains current row request history. Status distinguishes queued planning, active planning, prepared proposal, queued/rendering child, blocked/error and an actual attached unreviewed derivative. A completed proposal alone is never presented as a finished review file.
+
+Each proposal shows exact source range, rationale and episode/transcript revisions. Derived requests link to their original planning request; attached derivatives retain original identity, source range, checksum and an explicit unreviewed label. Find imported review version searches inventory by its exact reference, clearing incompatible filters; it does not claim the file is already imported or grant remote filesystem access. Originals stay visible in provenance. A saved proposal with a transition conflict is shown as blocked and requires a fresh current-source request.
+
+`CHROMIUM_PATH=<installed Nix Chrome> node security-review/inventory-cut-status-regression.mjs` checks these states and unavailable/enabled gates on desktop/mobile using synthetic fixtures. Screenshots: `test-results/cut-status-{disabled,enabled}-{1440,390}.png`.

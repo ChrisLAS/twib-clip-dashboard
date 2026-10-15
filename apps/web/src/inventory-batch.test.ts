@@ -83,3 +83,17 @@ describe("batch cutdown preparation", () => {
     ).toThrow("2,000");
   });
 });
+
+it("blocks oversized sources with an actionable 512 MiB reason", () => {
+  const oversized = structuredClone(record);
+  oversized.variants[0].item.media!.size_bytes = 512 * 1024 * 1024 + 1;
+  expect(batchEligible(oversized)).toBe(false);
+  expect(() =>
+    batchPayload(
+      oversized,
+      "",
+      { guidance: "", start: "", end: "" },
+      "operation",
+    ),
+  ).toThrow("512 MiB");
+});

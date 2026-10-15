@@ -970,3 +970,11 @@
 .inventory-batch-panel strong {
   overflow-wrap: anywhere;
 }
+
+.inventory-cut-status {
+  margin: 0.8rem 0;
+  padding: 0.8rem;
+  border: 1px solid #627782;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}

@@ -59,6 +59,7 @@ function InventoryRecord({
   onReviewSaved,
   onClose,
   onRefresh,
+  onFindDerivative,
 }: {
   record: RecordItem;
   cutRequestsEnabled?: boolean;
@@ -74,6 +75,7 @@ function InventoryRecord({
   onReviewSaved: (review: InventoryReview) => void;
   onClose: () => void;
   onRefresh: () => void;
+  onFindDerivative: (ref: string) => void;
 }) {
   const [confirmedRef, setConfirmedRef] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -300,6 +302,7 @@ function InventoryRecord({
           <InventoryReviewEditor
             record={record}
             cutRequestsEnabled={cutRequestsEnabled}
+            onFindDerivative={onFindDerivative}
             csrfToken={csrfToken}
             draft={reviewDraft}
             onDraft={onReviewDraft}
@@ -309,9 +312,9 @@ function InventoryRecord({
         </div>
         <p className="inventory-privacy">
           <ShieldCheck size={14} />
-          Source URLs and producer editorial context are not displayed. Saving
-          reviews changes dashboard metadata only. Local playback uses files you
-          explicitly select; no host file operations are enabled.
+          Source URLs are not displayed. Cut requests can start background jobs
+          only when their planning and execution gates are enabled. Originals
+          stay intact. Local playback uses files you explicitly select.
         </p>
       </div>
     </details>
@@ -864,6 +867,10 @@ export function InventoryPanel({
         {data?.cutRequestsEnabled && (
           <InventoryBatchPanel
             key={JSON.stringify([owner, data.sourceId, data.episodeId])}
+            planningEnabled={data.cutPlanningEnabled === true}
+            executionEnabled={data.cutExecutionEnabled === true}
+            autoRenderEnabled={data.cutFirstPassAutoEnabled === true}
+            onRefresh={() => setRevision((v) => v + 1)}
             scope={{
               owner: owner ?? "",
               source: data.sourceId,
@@ -938,6 +945,15 @@ export function InventoryPanel({
                     key={key}
                     record={item}
                     cutRequestsEnabled={data.cutRequestsEnabled}
+                    onFindDerivative={(ref) => {
+                      setGroup("all");
+                      setStatus(null);
+                      setQuery(ref);
+                      setDraft(ref);
+                      setReviewFilter("all");
+                      setDurationFilter("all");
+                      resetPage();
+                    }}
                     pinned={pinned?.id === item.id}
                     active={active}
                     csrfToken={csrfToken}

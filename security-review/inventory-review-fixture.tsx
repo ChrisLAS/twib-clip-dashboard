@@ -568,12 +568,12 @@ void (async () => {
     await until(() =>
       document
         .querySelector('[aria-label="Saved cut request"]')
-        ?.textContent?.includes("needs_review"),
+        ?.textContent?.includes("Needs review before continuing"),
     );
     check(
       document
         .querySelector('[aria-label="Saved cut request"]')
-        ?.textContent?.includes("needs_review"),
+        ?.textContent?.includes("Needs review before continuing"),
       "editorial guidance stays in review and newest saved request is visible",
     );
     button("Release selected local files").click();

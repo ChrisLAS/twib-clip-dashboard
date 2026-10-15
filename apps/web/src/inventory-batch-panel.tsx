@@ -1,3 +1,4 @@
+import { cutStatusLabel } from "./inventory-cut-status";
 import { useEffect, useRef, useState } from "react";
 import type {
   InventoryReadItem,
@@ -7,6 +8,7 @@ import type {
 import { api, RequestError } from "./api";
 import {
   batchEligible,
+  batchSizeIssue,
   batchPayload,
   type BatchInstructions,
 } from "./inventory-batch";
@@ -70,8 +72,16 @@ export function InventoryBatchPanel({
   blockedIds,
   scope,
   onSaved,
+  planningEnabled = false,
+  executionEnabled = false,
+  autoRenderEnabled = false,
+  onRefresh,
 }: {
   items: InventoryReadItem[];
+  planningEnabled?: boolean;
+  executionEnabled?: boolean;
+  autoRenderEnabled?: boolean;
+  onRefresh?: () => void;
   csrfToken?: string;
   blockedIds: string[];
   scope: BatchScope;
@@ -354,29 +364,46 @@ export function InventoryBatchPanel({
         browsing pages. Originals stay intact; new versions require your review.
       </p>
       <p>
-        Episode-context planning is not connected yet. First-pass requests are
-        saved for planning, not automatically cut. Explicit ranges use the
-        existing execution gates.
+        {planningEnabled
+          ? "Episode-context planning is enabled. First-pass requests can be queued for planning."
+          : "Episode-context planning is disabled. First-pass requests are saved without starting planning."}{" "}
+        {executionEnabled
+          ? "Explicit-range rendering is enabled for eligible bounded cuts."
+          : "Rendering is disabled. No new review file will be produced until execution is enabled."}{" "}
+        {autoRenderEnabled
+          ? "Automatic first-pass rendering is enabled; finished versions remain unreviewed."
+          : "Automatic first-pass rendering is disabled; a prepared plan alone does not start a render."}
       </p>
       <fieldset disabled={busy || locked || !!storageError}>
         <legend>Eligible clips on this page</legend>
-        {items.filter(batchEligible).map((record) => (
-          <label key={record.id} className="inventory-batch-choice">
-            <input
-              type="checkbox"
-              checked={!!entries[record.id]}
-              disabled={
-                blockedIds.includes(record.id) ||
-                (!entries[record.id] && selected.length >= 20)
-              }
-              onChange={() => toggle(record)}
-            />
-            {record.filename ?? record.variants[0].item.media?.ref}
-            {blockedIds.includes(record.id)
-              ? " · finish your unsaved review first"
-              : ""}
-          </label>
-        ))}
+        {items
+          .filter(
+            (record) =>
+              (record.variants[0]?.item.media?.duration_seconds ?? 0) > 300,
+          )
+          .map((record) => (
+            <label key={record.id} className="inventory-batch-choice">
+              <input
+                type="checkbox"
+                checked={!!entries[record.id]}
+                disabled={
+                  !batchEligible(record) ||
+                  blockedIds.includes(record.id) ||
+                  (!entries[record.id] && selected.length >= 20)
+                }
+                onChange={() => toggle(record)}
+              />
+              {record.filename ?? record.variants[0].item.media?.ref}
+              {!batchEligible(record)
+                ? " · " +
+                  (batchSizeIssue(record) ??
+                    "Resolve source identity or review before selecting.")
+                : ""}
+              {blockedIds.includes(record.id)
+                ? " · finish your unsaved review first"
+                : ""}
+            </label>
+          ))}
         {!items.some(batchEligible) && (
           <p>No eligible long clips on this page.</p>
         )}
@@ -391,6 +418,11 @@ export function InventoryBatchPanel({
           />
         </label>
       </fieldset>
+      {onRefresh && (
+        <button type="button" disabled={busy} onClick={onRefresh}>
+          Refresh request status
+        </button>
+      )}
       {selected.map((entry) => (
         <section key={entry.record.id} aria-label="Selected cutdown">
           <strong>
@@ -438,6 +470,21 @@ export function InventoryBatchPanel({
             <p role="status">
               Request saved: {entry.receipt?.state ?? "decision only"}
               {entry.receipt?.code ? " · " + entry.receipt.code : ""}
+            </p>
+          )}
+          {items
+            .find((item) => item.id === entry.record.id)
+            ?.cutRequests?.map((cut) => (
+              <p key={cut.requestId}>
+                Latest request status: {cutStatusLabel(cut)}
+                {cut.code ? " · " + cut.code : ""}
+                {cut.derivative ? " · " + cut.derivative.ref : ""}
+              </p>
+            ))}
+          {entry.saved && (
+            <p>
+              Saved acknowledgement above; refresh and open the source row for
+              current plans and review versions.
             </p>
           )}
           {entry.error && <p role="alert">{entry.error}</p>}
