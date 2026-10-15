@@ -956,3 +956,17 @@
 .inventory-batch-panel button {
   margin: 0.5rem 0.5rem 0.5rem 0;
 }
+
+.inventory-batch-panel input:not([type="checkbox"]) {
+  display: block;
+  width: 100%;
+  margin: 0.35rem 0;
+  padding: 0.65rem;
+  border: 1px solid #627782;
+  border-radius: 5px;
+  background: #121b20;
+  color: #e6ebed;
+}
+.inventory-batch-panel strong {
+  overflow-wrap: anywhere;
+}
