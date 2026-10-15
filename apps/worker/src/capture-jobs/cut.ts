@@ -1,6 +1,7 @@
 import { sha256 } from "../inventory/contract";
 import { kindGranted } from "./scope";
 import {
+  executableCutParentSchema,
   cutSpecSchema,
   cutWireSchema,
   derivativeSchema,
@@ -141,6 +142,7 @@ type Row = {
   code: string | null;
   proposal_json?: string | null;
   source_plan_request_id?: string | null;
+  transition_code?: string | null;
   exec_state?: string | null;
   exec_code?: string | null;
 };
@@ -149,6 +151,7 @@ export function cutView(row: Row) {
   return {
     requestId: row.request_id,
     sourcePlanRequestId: row.source_plan_request_id ?? null,
+    transitionCode: row.transition_code ?? null,
     parentItemId: row.item_id,
     parentVersion: row.parent_version,
     reviewRevision: row.review_revision,
@@ -222,6 +225,12 @@ export async function enqueueCut(
     return cutView(row);
   const wire = cutWireSchema.parse(JSON.parse(row.request_json));
   if ((wire.spec.kind !== "range") !== planning) throw denied();
+  if (!executableCutParentSchema.safeParse(wire.parent).success)
+    throw new HttpError(
+      409,
+      "CUT_PARENT_UNEXECUTABLE",
+      "A valid native clip identity and source size of at most 512 MiB are required before planning or cutting. Instructions remain saved.",
+    );
   const queuedWire = planning
     ? JSON.stringify(
         planWireSchema.parse({
@@ -288,7 +297,12 @@ export async function retryCut(
   const row = await readCut(db, id);
   if (!row || row.owner !== owner || row.derivative_json) throw denied();
   const wire = cutWireSchema.parse(JSON.parse(row.request_json));
-  if (wire.spec.kind !== "range" || !wire.parent.sha256) throw denied();
+  if (
+    wire.spec.kind !== "range" ||
+    !wire.parent.sha256 ||
+    !executableCutParentSchema.safeParse(wire.parent).success
+  )
+    throw denied();
   const { episode, obs, duplicateId } = await eligibility(db, row);
   await retryJob(db, id, value, now, {
     sql: `NOT EXISTS(SELECT 1 FROM inventory_cut_requests c WHERE c.request_id=? AND c.derivative_json IS NOT NULL) AND EXISTS(SELECT 1 FROM inventory_observations o WHERE o.source_id=? AND o.episode_id=? AND o.item_id=? AND o.receipt_id=? AND o.sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence)) AND EXISTS(SELECT 1 FROM inventory_reviews WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?) AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`,

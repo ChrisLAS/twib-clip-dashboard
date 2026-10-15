@@ -325,7 +325,7 @@ export async function acceptResult(
       ? [
           db
             .prepare(
-              "UPDATE inventory_cut_requests SET state=?,code=?,derivative_json=?,updated_at=? WHERE request_id=? AND derivative_json IS NULL AND EXISTS(SELECT 1 FROM capture_job_deliveries WHERE delivery_id=? AND request_json=?)",
+              "UPDATE inventory_cut_requests SET state=?,code=?,derivative_json=?,updated_at=? WHERE request_id=? AND derivative_json IS NULL AND EXISTS(SELECT 1 FROM capture_jobs WHERE job_id=? AND lease_id=? AND state=? AND attempt=? AND updated_at=?) AND EXISTS(SELECT 1 FROM capture_job_deliveries WHERE delivery_id=? AND request_json=?)",
             )
             .bind(
               input.state === "needs_review"
@@ -339,6 +339,11 @@ export async function acceptResult(
               derivative ? JSON.stringify(derivative) : null,
               now,
               input.job_id,
+              input.job_id,
+              input.lease_id,
+              input.state,
+              input.attempt,
+              now,
               input.delivery_id,
               wire,
             ),

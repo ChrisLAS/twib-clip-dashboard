@@ -1,4 +1,5 @@
-import { transitionFirstPass } from "./plan";
+import { planningEnabled } from "./cut";
+import { transitionAfterReceipt } from "./plan";
 import { requireKind } from "./scope";
 import { claimSchema, resultSchema } from "./contract";
 import type { Env } from "../env";
@@ -13,7 +14,11 @@ export function requireJobsEnabled(env: Env) {
       "Capture jobs are not activated.",
     );
 }
-export async function jobBody(request: Request): Promise<unknown> {
+export const PLAN_RESULT_MAX_BYTES = 32768;
+export async function jobBody(
+  request: Request,
+  maxBytes = 4096,
+): Promise<unknown> {
   if (!request.headers.get("Content-Type")?.startsWith("application/json"))
     throw new HttpError(415, "JSON_REQUIRED", "Use JSON requests.");
   const reader = request.body?.getReader();
@@ -25,7 +30,7 @@ export async function jobBody(request: Request): Promise<unknown> {
         const { value, done } = await reader.read();
         if (done) break;
         size += value.length;
-        if (size > 4096) {
+        if (size > maxBytes) {
           await reader.cancel();
           throw new HttpError(
             413,
@@ -53,8 +58,12 @@ export async function jobBody(request: Request): Promise<unknown> {
 export async function machineJobs(request: Request, env: Env) {
   requireJobsEnabled(env);
   await authenticateCaptureJobs(request, env);
-  const input = await jobBody(request);
-  if (new URL(request.url).pathname.endsWith("/claim")) {
+  const isClaim = new URL(request.url).pathname.endsWith("/claim");
+  const input = await jobBody(
+    request,
+    !isClaim && planningEnabled(env) ? PLAN_RESULT_MAX_BYTES : 4096,
+  );
+  if (isClaim) {
     const claim = claimSchema.parse(input);
     requireKind(env, claim.job_kind ?? "capture");
     return json(await claimJob(env.DB, claim));
@@ -85,6 +94,6 @@ export async function machineJobs(request: Request, env: Env) {
     JSON.parse(job.request_json).kind === "plan" &&
     result.code === "EDITORIAL_PROPOSAL_READY"
   )
-    await transitionFirstPass(env, result.job_id);
+    await transitionAfterReceipt(env, result.job_id);
   return json(ack);
 }

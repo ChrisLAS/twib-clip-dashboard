@@ -59,6 +59,24 @@ export const cutParentSchema = z
     modified_at: z.string().nullable(),
   })
   .strict();
+// Stored requests may predate native identity evidence. Only executable wires
+// use this stricter adapter-compatible identity contract.
+export const executableCutParentSchema = cutParentSchema
+  .extend({
+    size_bytes: z.number().int().positive().max(536870912),
+    clip_id: z
+      .string()
+      .regex(/^[A-Za-z0-9_.:-]{1,128}$/)
+      .nullable(),
+    clip_uid: z
+      .string()
+      .regex(/^[A-Za-z0-9_.:-]{1,128}$/)
+      .nullable(),
+  })
+  .refine(
+    (v) => v.clip_id !== null || v.clip_uid !== null,
+    "A native parent identity is required",
+  );
 export const cutWireSchema = z
   .object({
     job_id: z
@@ -109,6 +127,7 @@ const digest = z.string().regex(/^[a-f0-9]{64}$/);
 export const planWireSchema = cutWireSchema
   .extend({
     kind: z.literal("plan"),
+    parent: executableCutParentSchema,
     planning: z
       .object({
         parentVersion: digest,
@@ -129,7 +148,20 @@ export const proposalSchema = z
     transcriptRevision: digest,
     sourceSha256: digest,
     range: cutSpecSchema.refine((v) => v.kind === "range"),
-    rationale: z.string().trim().min(1).max(2000),
+    rationale: z
+      .string()
+      .refine(
+        (v) =>
+          v.trim().length > 0 &&
+          Array.from(v).length <= 2000 &&
+          !Array.from(v).some(
+            (c) =>
+              c.length === 1 &&
+              c.charCodeAt(0) >= 0xd800 &&
+              c.charCodeAt(0) <= 0xdfff,
+          ),
+        "Use 1–2000 Unicode scalar values with nonblank content",
+      ),
     ready: z.literal(false),
     approval: z.literal("unreviewed"),
   })

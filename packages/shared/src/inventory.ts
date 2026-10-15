@@ -30,6 +30,7 @@ export interface InventoryProducerRecord {
 export interface InventoryCutRequest {
   requestId: string;
   sourcePlanRequestId?: string | null;
+  transitionCode?: string | null;
   parentItemId: string;
   parentVersion: string;
   reviewRevision: number;
@@ -180,6 +181,7 @@ export interface InventoryResponse {
   cutRequestsEnabled?: boolean;
   cutExecutionEnabled?: boolean;
   cutPlanningEnabled?: boolean;
+  cutFirstPassAutoEnabled?: boolean;
   sourceId: string;
   episodeId: string;
   episodeNumber: number | null;

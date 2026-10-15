@@ -47,6 +47,7 @@ beforeEach(() => {
     "0014_inventory_cut_requests.sql",
     "0015_inventory_cut_planning.sql",
     "0016_first_pass_derivative_link.sql",
+    "0017_first_pass_transition_outcome.sql",
   ])
     sqlite.exec(
       readFileSync(new URL("../migrations/" + name, import.meta.url), "utf8"),
@@ -723,6 +724,13 @@ it("duration filtering is strictly over 300 seconds before paginated numeric sor
 async function planningFixture() {
   const { claimJob } = await import("../src/capture-jobs/store");
   const item = media(1, "long-original.mp4");
+  item.producer_record = {
+    clip_id: "fixture-parent",
+    record_kind: "processing-history",
+    first_seen_at: null,
+    source_signature: null,
+    parent_clip_id: null,
+  };
   item.media!.duration_seconds = 900;
   await accept([item]);
   const review = await save(item, "cut_down", 0, {
@@ -1013,3 +1021,324 @@ it("automatic first pass finishes as a linked unreviewed derivative while origin
   ).toBe("cut_down");
   expect(await transitionFirstPass(autoEnv(), id, now + 5)).toEqual(next);
 });
+it.each([null, "", "bad id", "slash/id", "é", "x".repeat(129)])(
+  "native identity %j cannot enter either execution queue",
+  async (native) => {
+    const { preparedCut } = await import("../src/capture-jobs/cut");
+    const { executableCutParentSchema } =
+      await import("../src/capture-jobs/cut-contract");
+    for (const spec of [
+      { kind: "first_pass" },
+      { kind: "range", startSeconds: 1, endSeconds: 10 },
+    ]) {
+      const item = media(
+        spec.kind === "first_pass" ? 1 : 2,
+        spec.kind + ".mp4",
+      );
+      item.producer_record = {
+        clip_id: "fixture-parent",
+        record_kind: "processing-history",
+        first_seen_at: null,
+        source_signature: null,
+        parent_clip_id: null,
+      };
+      const p = preparedCut(
+        {
+          operationId: crypto.randomUUID(),
+          expectedVersion: await inventoryVersion(item),
+          expectedRevision: 0,
+          cutSpec: spec,
+        },
+        item,
+        "synthetic-owner",
+        now,
+      )!;
+      // Legacy saved requests may lack adapter-compatible identity, even though
+      // the current inventory ingestion path rejects malformed native IDs.
+      const wire = JSON.parse(p.wire);
+      wire.parent.clip_id = native;
+      expect(executableCutParentSchema.safeParse(wire.parent).success).toBe(
+        false,
+      );
+      sqlite
+        .prepare(
+          "INSERT INTO inventory_cut_requests(request_id,item_id,owner,parent_version,review_revision,request_json,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        )
+        .run(
+          p.id,
+          p.itemId,
+          p.owner,
+          p.version,
+          p.revision,
+          JSON.stringify(wire),
+          p.state,
+          now,
+          now,
+        );
+      await expect(
+        enqueueCut(
+          db,
+          p.id,
+          "synthetic-owner",
+          now,
+          spec.kind === "first_pass",
+        ),
+      ).rejects.toBeTruthy();
+    }
+    expect(sqlite.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(
+      0,
+    );
+  },
+);
+it("delayed duplicate plan progress receipt cannot rewind a terminal proposal", async () => {
+  const { acceptResult } = await import("../src/capture-jobs/store");
+  const { id, result } = await planningFixture();
+  const { proposal: ignored, ...rest } = result;
+  void ignored;
+  const progress = {
+    ...rest,
+    delivery_id: crypto.randomUUID(),
+    state: "running",
+    code: "PLANNING_STARTED",
+  };
+  const realBatch = db.batch.bind(db);
+  let inject = true;
+  db.batch = (async (statements: D1PreparedStatement[]) => {
+    if (inject) {
+      inject = false;
+      await acceptResult(db, progress, now + 1);
+      await acceptResult(db, result, now + 2);
+    }
+    return realBatch(statements);
+  }) as typeof db.batch;
+  await acceptResult(db, progress, now + 1);
+  expect(await readCut(db, id)).toMatchObject({
+    state: "needs_review",
+    exec_state: "needs_review",
+    code: "EDITORIAL_PROPOSAL_READY",
+    exec_code: "EDITORIAL_PROPOSAL_READY",
+  });
+});
+it("delayed duplicate ordinary cut progress cannot rewind a terminal failure view", async () => {
+  const { acceptResult, claimJob } = await import("../src/capture-jobs/store");
+  const { id } = await queuedCut();
+  await retryCut(
+    db,
+    id,
+    { retry_id: crypto.randomUUID() },
+    "synthetic-owner",
+    now,
+  );
+  const lease = crypto.randomUUID();
+  await claimJob(db, { request_id: lease, job_kind: "cut" }, now);
+  const progress = {
+    delivery_id: crypto.randomUUID(),
+    job_id: id,
+    lease_id: lease,
+    state: "running",
+    attempt: 1,
+    code: "CUT_STARTED",
+  };
+  const terminal = {
+    ...progress,
+    delivery_id: crypto.randomUUID(),
+    state: "needs_review",
+    code: "CUT_FAILED_FIXTURE",
+  };
+  const realBatch = db.batch.bind(db);
+  let inject = true;
+  db.batch = (async (statements: D1PreparedStatement[]) => {
+    if (inject) {
+      inject = false;
+      await acceptResult(db, progress, now + 1);
+      await acceptResult(db, terminal, now + 2);
+    }
+    return realBatch(statements);
+  }) as typeof db.batch;
+  await acceptResult(db, progress, now + 1);
+  expect(await readCut(db, id)).toMatchObject({
+    state: "failed",
+    exec_state: "needs_review",
+    code: "CUT_FAILED_FIXTURE",
+  });
+});
+async function machineResult(
+  input: unknown,
+  env = autoEnv(),
+  path = "result",
+  encoded?: string,
+) {
+  const time = Date.now(),
+    seconds = Math.floor(time / 1000);
+  Object.assign(env, {
+    APP_ENV: "production",
+    ACCESS_AUD: "a".repeat(64),
+    CAPTURE_JOBS_APP_ORIGIN: "https://fixture.example.com",
+    CAPTURE_JOBS_ACCESS_TEAM_DOMAIN: "fixture.cloudflareaccess.com",
+    CAPTURE_JOBS_ACCESS_AUD: "c".repeat(64),
+    CAPTURE_JOBS_ACCESS_CLIENT_ID: "cut-worker.access",
+    CAPTURE_JOBS_GRANT_SOURCE_ID: "nomad:capture-worker",
+    CAPTURE_JOBS_GRANT_SHOW: "twib",
+    CAPTURE_JOBS_GRANT_EPISODE: "127",
+    CAPTURE_JOBS_GRANT_SCOPES: "job:claim,job:result",
+    CAPTURE_JOBS_GRANT_STARTS_AT: new Date(time - 1000).toISOString(),
+    CAPTURE_JOBS_GRANT_EXPIRES_AT: new Date(time + 3600000).toISOString(),
+  });
+  const token = await new SignJWT({
+    iss: "https://fixture.cloudflareaccess.com",
+    aud: env.CAPTURE_JOBS_ACCESS_AUD,
+    sub: "",
+    type: "app",
+    common_name: "cut-worker.access",
+    iat: seconds,
+    exp: seconds + 300,
+  })
+    .setProtectedHeader({ alg: "RS256" })
+    .sign(privateKey);
+  return worker.fetch(
+    new Request("https://fixture.example.com/api/v1/capture-jobs/" + path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Cf-Access-Jwt-Assertion": token,
+      },
+      body: encoded ?? JSON.stringify(input),
+    }),
+    env,
+  );
+}
+const asciiJson = (input: unknown) =>
+  JSON.stringify(input).replace(
+    /[\u007f-\uffff]/g,
+    (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"),
+  );
+it.each(["é", "😀"])(
+  "actual machine result accepts full 2000-codepoint %s envelope without truncation",
+  async (char) => {
+    const { id, result } = await planningFixture();
+    result.proposal.rationale = char.repeat(2000);
+    sqlite
+      .prepare("UPDATE capture_jobs SET lease_expires_at=? WHERE job_id=?")
+      .run(Date.now() + 7200000, id);
+    const encoded = asciiJson(result);
+    expect(encoded.length).toBeGreaterThan(4096);
+    expect(
+      (await machineResult(result, autoEnv(), "result", encoded)).status,
+    ).toBe(200);
+    expect(JSON.parse((await readCut(db, id))!.proposal_json!).rationale).toBe(
+      result.proposal.rationale,
+    );
+  },
+);
+it("planning result byte budget remains bounded and does not expand claim budget", async () => {
+  const { result } = await planningFixture();
+  expect(
+    (await machineResult(result, autoEnv(), "result", " ".repeat(32769)))
+      .status,
+  ).toBe(413);
+  expect(
+    (await machineResult({}, autoEnv(), "claim", " ".repeat(4097))).status,
+  ).toBe(413);
+  const env = autoEnv();
+  env.CUT_PLANNING_ENABLED = "false";
+  expect(
+    (await machineResult(result, env, "result", " ".repeat(4097))).status,
+  ).toBe(413);
+});
+it.each(["between", "lost-response"])(
+  "accepted receipt ACK survives %s supersession and replay without a derived cut",
+  async (timing) => {
+    const { acceptResult, claimJob } =
+      await import("../src/capture-jobs/store");
+    const { id, result } = await planningFixture();
+    sqlite
+      .prepare("UPDATE capture_jobs SET lease_expires_at=? WHERE job_id=?")
+      .run(Date.now() + 7200000, id);
+    const env = autoEnv();
+    if (timing === "lost-response") {
+      await acceptResult(db, result);
+      sqlite.prepare("UPDATE inventory_reviews SET revision=revision+1").run();
+    } else {
+      let inject = true;
+      env.DB = {
+        ...db,
+        batch: async (statements: D1PreparedStatement[]) => {
+          const saved = await db.batch(statements);
+          if (inject) {
+            inject = false;
+            sqlite
+              .prepare("UPDATE inventory_reviews SET revision=revision+1")
+              .run();
+          }
+          return saved;
+        },
+      } as D1Database;
+    }
+    const response = await machineResult(result, env);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ accepted: true });
+    expect((await machineResult(result, env)).status).toBe(200);
+    expect(await readCut(db, id)).toMatchObject({
+      state: "needs_review",
+      transition_code: "CUT_REQUEST_CONFLICT",
+    });
+    expect(sqlite.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(
+      1,
+    );
+    // Acknowledged terminal job does not monopolize the next planning claim.
+    expect(
+      (
+        await claimJob(db, {
+          request_id: crypto.randomUUID(),
+          job_kind: "plan",
+        })
+      ).claim,
+    ).toBeNull();
+  },
+);
+it.each(["😀".repeat(2001), "\ud800", "\udfff", "   "])(
+  "invalid rationale is rejected without storing terminal receipt",
+  async (rationale) => {
+    const { proposalSchema } = await import("../src/capture-jobs/cut-contract");
+    const { id, result } = await planningFixture();
+    result.proposal.rationale = rationale;
+    expect(proposalSchema.safeParse(result.proposal).success).toBe(false);
+    expect((await readCut(db, id))!.proposal_json).toBeNull();
+  },
+);
+it.each([536870912, 536870913])(
+  "source proof byte size %s matches the executor limit before enqueue",
+  async (size) => {
+    const { executableCutParentSchema } =
+      await import("../src/capture-jobs/cut-contract");
+    const item = media(1, "boundary.mp4");
+    item.media!.size_bytes = size;
+    item.media!.duration_seconds = 900;
+    item.producer_record = {
+      clip_id: "fixture-parent",
+      record_kind: "processing-history",
+      first_seen_at: null,
+      source_signature: null,
+      parent_clip_id: null,
+    };
+    await accept([item]);
+    const saved = await save(item, "cut_down", 0, {
+      cutSpec: { kind: "first_pass" },
+    });
+    const parent = JSON.parse(
+      (await readCut(db, saved.cutRequestId!))!.request_json,
+    ).parent;
+    expect(executableCutParentSchema.safeParse(parent).success).toBe(
+      size === 536870912,
+    );
+    if (size === 536870912)
+      await enqueueCut(db, saved.cutRequestId!, "synthetic-owner", now, true);
+    else
+      await expect(
+        enqueueCut(db, saved.cutRequestId!, "synthetic-owner", now, true),
+      ).rejects.toMatchObject({ code: "CUT_PARENT_UNEXECUTABLE" });
+    expect(sqlite.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(
+      size === 536870912 ? 1 : 0,
+    );
+  },
+);

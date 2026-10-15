@@ -262,6 +262,11 @@ export default {
           cutRequestsEnabled: cutsEnabled(env) && !demo,
           cutExecutionEnabled: executionEnabled(env) && !demo,
           cutPlanningEnabled: planningEnabled(env) && !demo,
+          cutFirstPassAutoEnabled:
+            env.CUT_FIRST_PASS_AUTO_ENABLED === "true" &&
+            planningEnabled(env) &&
+            executionEnabled(env) &&
+            !demo,
         });
       } else if (path === "/api/inventory/review" && method === "POST") {
         const input = await body(request, 24000);

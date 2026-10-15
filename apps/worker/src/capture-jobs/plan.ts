@@ -131,7 +131,7 @@ export async function acceptPlanResult(
       ),
     db
       .prepare(
-        "UPDATE capture_jobs SET state=?,attempt=?,code=?,updated_at=? WHERE job_id=? AND EXISTS(SELECT 1 FROM capture_job_deliveries WHERE delivery_id=? AND request_json=?)",
+        "UPDATE capture_jobs SET state=?,attempt=?,code=?,updated_at=? WHERE job_id=? AND lease_id=? AND state=? AND attempt=? AND NOT EXISTS(SELECT 1 FROM inventory_cut_requests WHERE request_id=? AND proposal_json IS NOT NULL) AND EXISTS(SELECT 1 FROM capture_job_deliveries WHERE delivery_id=? AND request_json=?)",
       )
       .bind(
         input.state,
@@ -139,12 +139,16 @@ export async function acceptPlanResult(
         input.code,
         now,
         input.job_id,
+        input.lease_id,
+        job.state,
+        job.attempt,
+        input.job_id,
         input.delivery_id,
         wire,
       ),
     db
       .prepare(
-        "UPDATE inventory_cut_requests SET state=?,code=?,proposal_json=?,updated_at=? WHERE request_id=? AND proposal_json IS NULL AND EXISTS(SELECT 1 FROM capture_job_deliveries WHERE delivery_id=? AND request_json=?)",
+        "UPDATE inventory_cut_requests SET state=?,code=?,proposal_json=?,updated_at=? WHERE request_id=? AND proposal_json IS NULL AND EXISTS(SELECT 1 FROM capture_jobs WHERE job_id=? AND lease_id=? AND state=? AND attempt=? AND updated_at=?) AND EXISTS(SELECT 1 FROM capture_job_deliveries WHERE delivery_id=? AND request_json=?)",
       )
       .bind(
         input.state,
@@ -152,6 +156,11 @@ export async function acceptPlanResult(
         input.proposal ? JSON.stringify(input.proposal) : null,
         now,
         input.job_id,
+        input.job_id,
+        input.lease_id,
+        input.state,
+        input.attempt,
+        now,
         input.delivery_id,
         wire,
       ),
@@ -164,6 +173,23 @@ export async function acceptPlanResult(
     .first<{ request_json: string; response_json: string }>();
   if (saved?.request_json !== wire) throw conflict();
   return JSON.parse(saved.response_json) as unknown;
+}
+
+// A committed planning receipt must be acknowledged even when a later owner
+// decision makes its derived execution ineligible. Preserve that separate outcome.
+export async function transitionAfterReceipt(env: Env, id: string) {
+  const current = await readCut(env.DB, id);
+  if (current?.transition_code) return;
+  try {
+    await transitionFirstPass(env, id);
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.status !== 409) throw error;
+    await env.DB.prepare(
+      "UPDATE inventory_cut_requests SET transition_code=? WHERE request_id=? AND proposal_json IS NOT NULL AND transition_code IS NULL AND NOT EXISTS(SELECT 1 FROM inventory_cut_requests child WHERE child.source_plan_request_id=?)",
+    )
+      .bind(error.code, id, id)
+      .run();
+  }
 }
 
 // Internal transition, called only after authenticated plan receipt and BOTH

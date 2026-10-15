@@ -51,6 +51,7 @@ beforeEach(async () => {
     "0014_inventory_cut_requests.sql",
     "0015_inventory_cut_planning.sql",
     "0016_first_pass_derivative_link.sql",
+    "0017_first_pass_transition_outcome.sql",
   ])
     raw.exec(
       readFileSync(new URL("../migrations/" + file, import.meta.url), "utf8"),
