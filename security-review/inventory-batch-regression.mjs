@@ -78,12 +78,22 @@ try {
     assert.equal(writes[0].notes, "original note");
     assert.equal(writes.filter((w) => w.itemId === writes[0].itemId).length, 1);
     await page.getByRole("button", { name: "Clear batch" }).click();
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll('[aria-label="Selected cutdown"]').length ===
+        0,
+    );
     await page.getByRole("checkbox").check();
     await page.getByRole("button", { name: "Change source" }).click();
     await page.getByRole("button", { name: "Save cutdown requests" }).click();
     assert.match(await page.getByRole("alert").innerText(), /changed/);
     assert.equal((await page.evaluate(() => window.writes)).length, 4);
     await page.getByRole("button", { name: "Clear batch" }).click();
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll('[aria-label="Selected cutdown"]').length ===
+        0,
+    );
     await page.getByRole("checkbox").check();
     await page.evaluate(() => {
       window.rejectNext = true;

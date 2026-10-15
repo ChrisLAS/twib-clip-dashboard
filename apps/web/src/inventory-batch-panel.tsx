@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   InventoryReadItem,
   InventoryReview,
@@ -10,35 +10,103 @@ import {
   batchPayload,
   type BatchInstructions,
 } from "./inventory-batch";
+import {
+  clearOutbox,
+  newOutbox,
+  outboxKey,
+  readOutbox,
+  writeOutbox,
+  type BatchOutbox,
+  type BatchScope,
+} from "./inventory-batch-outbox";
 
 type Entry = {
   record: InventoryReadItem;
   instructions: BatchInstructions;
   payload?: InventoryReviewInput;
-  result?: InventoryReview;
+  saved?: boolean;
+  receipt?: { state: string; code?: string };
   error?: string;
   rejected?: boolean;
 };
+function restore(box: BatchOutbox | null): Record<string, Entry> {
+  return Object.fromEntries(
+    (box?.entries ?? []).map((entry) => {
+      const p = entry.payload;
+      return [
+        p.itemId,
+        {
+          record: {
+            id: p.itemId,
+            filename: "Restored request " + p.itemId.slice(-12),
+            variants: [],
+            readiness: "not_evaluated",
+            conflictingLatestObservations: false,
+            variantsTruncated: false,
+          },
+          instructions: {
+            guidance:
+              p.cutSpec.kind === "first_pass" ? (p.cutSpec.guidance ?? "") : "",
+            start: p.cutSpec.startSeconds?.toString() ?? "",
+            end:
+              p.cutSpec.kind === "range" ? p.cutSpec.endSeconds.toString() : "",
+          },
+          payload: p,
+          saved: entry.status === "saved",
+          rejected: entry.status === "rejected",
+          receipt: entry.receipt,
+          error:
+            entry.status === "pending"
+              ? "Restored unconfirmed operation. Reconcile using its original operation ID."
+              : undefined,
+        },
+      ];
+    }),
+  );
+}
 export function InventoryBatchPanel({
   items,
   csrfToken,
   blockedIds,
+  scope,
   onSaved,
 }: {
   items: InventoryReadItem[];
   csrfToken?: string;
   blockedIds: string[];
+  scope: BatchScope;
   onSaved: (itemId: string, review: InventoryReview) => void;
 }) {
-  const [entries, setEntries] = useState<Record<string, Entry>>({});
+  const [initial] = useState(() => {
+    try {
+      return { entries: restore(readOutbox(localStorage, scope)), error: "" };
+    } catch {
+      return {
+        entries: {},
+        error:
+          "Stored batch cannot be read safely. Submission is blocked; restore browser storage access and reload. Do not recreate uncertain requests.",
+      };
+    }
+  });
+  const [entries, setEntries] = useState<Record<string, Entry>>(
+    initial.entries,
+  );
   const [guidance, setGuidance] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const running = useRef(false);
+  const [storageError, setStorageError] = useState(initial.error);
+  const running = useRef(false),
+    mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const locked = Object.values(entries).some((e) => e.payload);
   const selected = Object.values(entries);
   function toggle(record: InventoryReadItem) {
-    if (busy || locked) return;
+    if (busy || locked || storageError) return;
     setEntries((old) => {
       const next = { ...old };
       if (next[record.id]) delete next[record.id];
@@ -59,10 +127,38 @@ export function InventoryBatchPanel({
       },
     }));
   }
-  async function submit() {
-    if (running.current || !csrfToken || !selected.length) return;
+  async function submitLocked() {
+    if (!csrfToken || !mounted.current) return;
     let requests: Entry[];
+    let box: BatchOutbox;
     try {
+      const existing = readOutbox(localStorage, scope);
+      if (existing) {
+        const expected = selected
+          .filter((e) => e.payload)
+          .map((e) => e.payload);
+        if (
+          JSON.stringify(existing.entries.map((e) => e.payload)) !==
+          JSON.stringify(expected)
+        ) {
+          setEntries(restore(existing));
+          setError(
+            "Another saved batch was found. Review it and reconcile its original operations.",
+          );
+          return;
+        }
+      }
+      if (
+        selected.some(
+          (entry) =>
+            !entry.saved &&
+            !entry.rejected &&
+            blockedIds.includes(entry.record.id),
+        )
+      )
+        throw new Error(
+          "A selected clip has an unsaved review. Finish the draft before submitting or reconciling this batch.",
+        );
       requests = selected.map((entry) => {
         if (entry.payload) return entry;
         const current = items.find((item) => item.id === entry.record.id);
@@ -86,48 +182,156 @@ export function InventoryBatchPanel({
           ),
         };
       });
+      // All immutable operations are durable before the first network request.
+      box =
+        existing ??
+        newOutbox(
+          scope,
+          requests.map((e) => e.payload!),
+        );
+      writeOutbox(localStorage, scope, box);
+      requests = requests.map((entry, i) => ({
+        ...entry,
+        saved: box.entries[i].status === "saved",
+        rejected: box.entries[i].status === "rejected",
+        receipt: box.entries[i].receipt,
+      }));
+      setEntries(
+        Object.fromEntries(requests.map((entry) => [entry.record.id, entry])),
+      );
     } catch (e) {
       setError(
-        e instanceof Error
-          ? e.message
-          : "Check the selected clips and timecodes.",
+        e instanceof Error ? e.message : "Cannot prepare this batch safely.",
+      );
+      return;
+    }
+    for (let i = 0; i < box.entries.length; i++) {
+      const operation = box.entries[i];
+      if (!mounted.current) break;
+      if (operation.status !== "pending") continue;
+      if (blockedIds.includes(operation.payload.itemId)) {
+        setError(
+          "An unsaved row review blocks this operation. Finish that draft before reconciling the batch.",
+        );
+        break;
+      }
+      let result: InventoryReview | undefined;
+      let rejected = false;
+      let message: string | undefined;
+      try {
+        // Readback immediately before dispatch prevents sending after storage loss.
+        const current = readOutbox(localStorage, scope);
+        if (JSON.stringify(current) !== JSON.stringify(box))
+          throw new Error("Outbox changed");
+      } catch {
+        setStorageError(
+          "Batch storage changed or became unavailable. Submission stopped; restore storage and reload to reconcile.",
+        );
+        break;
+      }
+      try {
+        result = await api.inventoryReview(operation.payload, csrfToken);
+      } catch (e) {
+        rejected = e instanceof RequestError && [409, 422].includes(e.status);
+        message = rejected
+          ? "Request rejected: " +
+            (e as Error).message +
+            " Clear the batch, refresh and select again."
+          : "Save not confirmed. Retry uses the same operation ID; successful clips will not be resubmitted.";
+      }
+      const receipt = result
+        ? {
+            state: result.cutRequest?.state ?? "decision only",
+            ...(result.cutRequest?.code
+              ? { code: result.cutRequest.code }
+              : {}),
+          }
+        : undefined;
+      box.entries[i] = {
+        ...operation,
+        status: result ? "saved" : rejected ? "rejected" : "pending",
+        ...(receipt ? { receipt } : {}),
+      };
+      try {
+        writeOutbox(localStorage, scope, box);
+      } catch {
+        setStorageError(
+          "The response could not be stored. Submission stopped. Reload after restoring storage to replay the original operation safely.",
+        );
+        break;
+      }
+      if (!mounted.current) break;
+      const entry = requests[i];
+      setEntries((old) => ({
+        ...old,
+        [operation.payload.itemId]: {
+          ...entry,
+          saved: !!result,
+          receipt,
+          rejected,
+          error: message,
+        },
+      }));
+      if (result) onSaved(operation.payload.itemId, result);
+    }
+  }
+  async function submit() {
+    if (running.current || !csrfToken || !selected.length || storageError)
+      return;
+    if (!navigator.locks) {
+      setStorageError(
+        "Safe browser locking is unavailable; batch submission is blocked.",
       );
       return;
     }
     running.current = true;
     setBusy(true);
     setError("");
-    setEntries(
-      Object.fromEntries(requests.map((entry) => [entry.record.id, entry])),
-    );
-    for (const entry of requests) {
-      if (entry.result || entry.rejected || !entry.payload) continue;
-      try {
-        const result = await api.inventoryReview(entry.payload, csrfToken);
-        setEntries((old) => ({
-          ...old,
-          [entry.record.id]: { ...entry, result, error: undefined },
-        }));
-        onSaved(entry.record.id, result);
-      } catch (e) {
-        setEntries((old) => ({
-          ...old,
-          [entry.record.id]: {
-            ...entry,
-            rejected:
-              e instanceof RequestError && [409, 422].includes(e.status),
-            error:
-              e instanceof RequestError && [409, 422].includes(e.status)
-                ? "Request rejected: " +
-                  e.message +
-                  " Clear the batch, refresh and select again."
-                : "Save not confirmed. Retry uses the same operation ID; successful clips will not be resubmitted.",
-          },
-        }));
-      }
+    try {
+      await navigator.locks.request(
+        outboxKey(scope),
+        { ifAvailable: true },
+        async (lock) => {
+          if (!lock) {
+            setError(
+              "This batch is active in another tab. Wait for it to finish, then reload.",
+            );
+            return;
+          }
+          await submitLocked();
+        },
+      );
+    } catch {
+      setStorageError(
+        "Batch storage or locking failed. Reload to reconcile before submitting anything new.",
+      );
+    } finally {
+      running.current = false;
+      if (mounted.current) setBusy(false);
     }
-    running.current = false;
-    setBusy(false);
+  }
+  async function clear() {
+    if (storageError || busy || !navigator.locks) return;
+    await navigator.locks.request(
+      outboxKey(scope),
+      { ifAvailable: true },
+      (lock) => {
+        if (!lock) {
+          setError("The batch is active in another tab.");
+          return;
+        }
+        try {
+          clearOutbox(localStorage, scope);
+          setEntries({});
+          setError("");
+          setGuidance("");
+        } catch (e) {
+          setError(
+            e instanceof Error ? e.message : "Could not clear stored batch.",
+          );
+        }
+      },
+    );
   }
   return (
     <section
@@ -144,7 +348,7 @@ export function InventoryBatchPanel({
         saved for planning, not automatically cut. Explicit ranges use the
         existing execution gates.
       </p>
-      <fieldset disabled={busy || locked}>
+      <fieldset disabled={busy || locked || !!storageError}>
         <legend>Eligible clips on this page</legend>
         {items.filter(batchEligible).map((record) => (
           <label key={record.id} className="inventory-batch-choice">
@@ -182,7 +386,7 @@ export function InventoryBatchPanel({
           <strong>
             {entry.record.filename ?? entry.record.variants[0].item.media?.ref}
           </strong>
-          <fieldset disabled={busy || locked}>
+          <fieldset disabled={busy || locked || !!storageError}>
             <legend>Clip-specific instructions (optional)</legend>
             <label>
               Guidance
@@ -220,23 +424,19 @@ export function InventoryBatchPanel({
               exact boundaries.
             </p>
           )}
-          {entry.result && (
+          {entry.saved && (
             <p role="status">
-              Request saved: {entry.result.cutRequest?.state ?? "decision only"}
-              {entry.result.cutRequest?.code
-                ? " · " + entry.result.cutRequest.code
-                : ""}
-              {entry.result.cutQueueError
-                ? " · " + entry.result.cutQueueError
-                : ""}
+              Request saved: {entry.receipt?.state ?? "decision only"}
+              {entry.receipt?.code ? " · " + entry.receipt.code : ""}
             </p>
           )}
           {entry.error && <p role="alert">{entry.error}</p>}
         </section>
       ))}
+      {storageError && <p role="alert">{storageError}</p>}
       {error && <p role="alert">{error}</p>}
       <p>
-        {selected.length} selected · {selected.filter((e) => e.result).length}{" "}
+        {selected.length} selected · {selected.filter((e) => e.saved).length}{" "}
         saved
       </p>
       <button
@@ -244,8 +444,9 @@ export function InventoryBatchPanel({
         disabled={
           busy ||
           !csrfToken ||
+          !!storageError ||
           !selected.length ||
-          selected.every((e) => e.result || e.rejected)
+          selected.every((e) => e.saved || e.rejected)
         }
         onClick={() => void submit()}
       >
@@ -259,21 +460,19 @@ export function InventoryBatchPanel({
         type="button"
         disabled={
           busy ||
+          !!storageError ||
           !selected.length ||
-          selected.some((e) => e.payload && !e.result && !e.rejected)
+          selected.some((e) => e.payload && !e.saved && !e.rejected)
         }
-        onClick={() => {
-          setEntries({});
-          setError("");
-          setGuidance("");
-        }}
+        onClick={() => void clear()}
       >
         Clear batch
       </button>
       {locked && (
         <p>
-          Keep this page open until every save is confirmed. Retries preserve
-          the original request and source version.
+          Pending operations are saved in this browser. After a reload,
+          reconcile this batch before starting another; retries preserve the
+          original request and source version.
         </p>
       )}
     </section>

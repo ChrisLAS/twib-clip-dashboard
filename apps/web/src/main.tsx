@@ -726,6 +726,8 @@ function App() {
           </div>
         )}
         <InventoryPanel
+          key={session?.owner ?? "unavailable"}
+          owner={session?.owner}
           csrfToken={session?.csrfToken}
           active={
             !clip && workspaceView === "inventory" && (!!session || !!demo)

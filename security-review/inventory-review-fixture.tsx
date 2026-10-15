@@ -157,7 +157,14 @@ let remount: () => void;
 function Fixture() {
   const [key, setKey] = useState(0);
   remount = () => setKey((v) => v + 1);
-  return <InventoryPanel key={key} active csrfToken="fixture-csrf" />;
+  return (
+    <InventoryPanel
+      owner="fixture-owner"
+      key={key}
+      active
+      csrfToken="fixture-csrf"
+    />
+  );
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

@@ -1,3 +1,4 @@
+import { scopedDraftIds } from "./inventory-batch-outbox";
 import { InventoryBatchPanel } from "./inventory-batch-panel";
 import {
   InventoryReviewEditor,
@@ -317,10 +318,12 @@ function InventoryRecord({
   );
 }
 export function InventoryPanel({
+  owner,
   active,
   csrfToken,
 }: {
   active: boolean;
+  owner?: string;
   csrfToken?: string;
 }) {
   const [group, setGroup] = useState<InventoryGroup>("media");
@@ -860,17 +863,19 @@ export function InventoryPanel({
         )}
         {data?.cutRequestsEnabled && (
           <InventoryBatchPanel
-            key={data.sourceId + ":" + data.episodeId}
+            key={JSON.stringify([owner, data.sourceId, data.episodeId])}
+            scope={{
+              owner: owner ?? "",
+              source: data.sourceId,
+              episode: data.episodeId,
+            }}
             items={loading ? [] : data.items}
             csrfToken={loading ? undefined : csrfToken}
-            blockedIds={data.items
-              .filter(
-                (item) =>
-                  !!reviewDrafts[
-                    inventoryScopeKey(data.sourceId, data.episodeId, item.id)
-                  ],
-              )
-              .map((item) => item.id)}
+            blockedIds={scopedDraftIds(
+              reviewDrafts,
+              data.sourceId,
+              data.episodeId,
+            )}
             onSaved={(id, review) => {
               setData((old) =>
                 old

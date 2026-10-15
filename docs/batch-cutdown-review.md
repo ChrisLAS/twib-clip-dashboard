@@ -7,7 +7,9 @@ This slice builds on draft PR 6, exact base `5f1ac28`. It is not deployed or act
 - Batch guidance, clip-specific guidance and timecodes are optional. Empty guidance creates a `first_pass` request; start-only is a hint. A complete positive range of at most 180 seconds uses the existing range contract. Exact ranges take precedence over prose, with an explicit UI notice.
 - Submission is bounded and sequential. Each item retains its own operation UUID, payload and result. Unconfirmed requests retry the same payload and UUID; saved items are skipped. Definite validation/conflict failures allow clearing/reselection. The server remains authoritative for stale-source and review-revision checks.
 - Original notes are preserved. Nothing in the batch UI overwrites media, marks a derivative approved, or changes production ordering. Existing per-request provenance and derivative references remain in row review history.
-- Keep the page open until saves are confirmed. This component retains its batch across filtering, pagination and hidden tabs, not a full browser reload. Review saved request history before recreating requests after a reload.
+- Before the first POST, all immutable operation payloads/UUIDs are durably written and read back in an authenticated owner/source/episode-scoped browser outbox. Only schema, scope, request payloads and minimal outcome receipts are stored; no CSRF token or full inventory record is stored.
+- Reload restores pending, confirmed and unsent items. Reconciliation replays the same operation UUID/payload through the existing server idempotency receipt mechanism; confirmed items are skipped. An unresolved batch blocks creating another. Corrupt, unavailable or mismatched storage fails closed; Web Locks prevent cooperating tabs from racing submissions.
+- Unsaved row-draft protection uses the complete source/episode draft registry, not the visible page. Account changes remount the inventory workspace and do not restore another owner's outbox.
 
 ## Verification
 
@@ -16,3 +18,5 @@ This slice builds on draft PR 6, exact base `5f1ac28`. It is not deployed or act
 `CHROMIUM_PATH=<installed Nix Chrome> node security-review/inventory-batch-regression.mjs` covers desktop and narrow mobile: selection across pages, no required guidance, partial failures, exact UUID replay, skipping successful saves, stale source rejection and recovery from a definite 409 rejection. All APIs/media are synthetic. Screenshots are generated in ignored `test-results/` and are not production evidence.
 
 The existing `npm ci` lockfile reports six dependency advisories (one moderate, three high, two critical). No dependency changes are included in this slice. Assess separately before rollout rather than applying an unreviewed broad dependency update.
+
+`CHROMIUM_PATH=<installed Nix Chrome> node security-review/inventory-batch-durability.mjs` additionally verifies lost acknowledgements after server commit, reload during a batch, exact operation replay without duplicate effects, unsent retention, saved skipping, storage quota/denial/corruption/owner mismatch and account isolation on desktop/mobile.
