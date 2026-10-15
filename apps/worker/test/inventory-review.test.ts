@@ -46,6 +46,7 @@ beforeEach(() => {
     "0013_inventory_review.sql",
     "0014_inventory_cut_requests.sql",
     "0015_inventory_cut_planning.sql",
+    "0016_first_pass_derivative_link.sql",
   ])
     sqlite.exec(
       readFileSync(new URL("../migrations/" + name, import.meta.url), "utf8"),
@@ -855,4 +856,160 @@ it("planning receipt transaction rejects a concurrent superseding decision", asy
     code: "PLAN_CONFLICT",
   });
   expect((await readCut(db, id))!.proposal_json).toBeNull();
+});
+function autoEnv(): Env {
+  return {
+    DB: db,
+    CUT_REQUESTS_ENABLED: "true",
+    CUT_JOBS_ENABLED: "true",
+    CAPTURE_JOBS_ENABLED: "true",
+    CUT_PLANNING_ENABLED: "true",
+    CUT_FIRST_PASS_AUTO_ENABLED: "true",
+    CAPTURE_JOBS_GRANT_OPERATIONS: "cut,plan",
+  } as Env;
+}
+it("automatic first pass deterministically queues one linked unapproved derivative and preserves the original review", async () => {
+  const { acceptResult, claimJob } = await import("../src/capture-jobs/store");
+  const { transitionFirstPass } = await import("../src/capture-jobs/plan");
+  const { id, result, original } = await planningFixture();
+  await acceptResult(db, result, now + 1);
+  const next = await transitionFirstPass(autoEnv(), id, now + 2);
+  expect(next?.sourcePlanRequestId).toBe(id);
+  expect(await transitionFirstPass(autoEnv(), id, now + 3)).toEqual(next);
+  expect((await readCut(db, id))!.request_json).toBe(original);
+  const derived = (await readCut(db, next!.requestId))!;
+  expect(derived.source_plan_request_id).toBe(id);
+  expect(derived.review_revision).toBe(1);
+  expect(derived.derivative_json).toBeNull();
+  const request = JSON.parse(derived.request_json);
+  expect(request.spec).toEqual(result.proposal.range);
+  expect(request.editorial).toEqual({
+    planJobId: id,
+    binding: result.proposal.binding,
+    contextRevision: result.proposal.contextRevision,
+    requestRevision: result.proposal.requestRevision,
+  });
+  expect(
+    (
+      await claimJob(
+        db,
+        { request_id: crypto.randomUUID(), job_kind: "cut" },
+        now + 4,
+      )
+    ).claim?.job_id,
+  ).toBe(next!.requestId);
+  expect(
+    sqlite.prepare("SELECT status,revision FROM inventory_reviews").get(),
+  ).toMatchObject({ status: "cut_down", revision: 1 });
+  expect(sqlite.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(
+    2,
+  );
+});
+it.each([
+  "CUT_FIRST_PASS_AUTO_ENABLED",
+  "CUT_PLANNING_ENABLED",
+  "CUT_JOBS_ENABLED",
+  "CUT_REQUESTS_ENABLED",
+  "CAPTURE_JOBS_ENABLED",
+  "CAPTURE_JOBS_GRANT_OPERATIONS",
+])("automatic transition is closed with missing %s", async (key) => {
+  const { acceptResult } = await import("../src/capture-jobs/store");
+  const { transitionFirstPass } = await import("../src/capture-jobs/plan");
+  const { id, result } = await planningFixture();
+  await acceptResult(db, result, now + 1);
+  const env = autoEnv();
+  delete (env as unknown as Record<string, unknown>)[key];
+  expect(await transitionFirstPass(env, id, now + 2)).toBeNull();
+  expect(sqlite.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(
+    1,
+  );
+});
+it.each(["cut", "plan"])(
+  "automatic transition requires both operation grants, not %s alone",
+  async (grant) => {
+    const { acceptResult } = await import("../src/capture-jobs/store");
+    const { transitionFirstPass } = await import("../src/capture-jobs/plan");
+    const { id, result } = await planningFixture();
+    await acceptResult(db, result, now + 1);
+    const env = autoEnv();
+    env.CAPTURE_JOBS_GRANT_OPERATIONS = grant;
+    expect(await transitionFirstPass(env, id, now + 2)).toBeNull();
+  },
+);
+it.each(["source", "review", "race"])(
+  "automatic transition rejects %s changes after plan receipt",
+  async (reason) => {
+    const { acceptResult } = await import("../src/capture-jobs/store");
+    const { transitionFirstPass } = await import("../src/capture-jobs/plan");
+    const { id, item, result } = await planningFixture();
+    await acceptResult(db, result, now + 1);
+    const env = autoEnv();
+    if (reason === "source") {
+      item.media!.size_bytes = 9999;
+      await accept([item]);
+    }
+    if (reason === "review") await save(item, "rejected", 1);
+    if (reason === "race")
+      env.DB = {
+        ...db,
+        batch: async (statements: D1PreparedStatement[]) => {
+          sqlite
+            .prepare("UPDATE inventory_reviews SET revision=revision+1")
+            .run();
+          return db.batch(statements);
+        },
+      } as D1Database;
+    await expect(transitionFirstPass(env, id, now + 2)).rejects.toBeTruthy();
+    expect(sqlite.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(
+      1,
+    );
+    expect(
+      sqlite.prepare("SELECT count(*) n FROM inventory_cut_requests").get()?.n,
+    ).toBe(1);
+  },
+);
+it("automatic first pass finishes as a linked unreviewed derivative while originals remain intact", async () => {
+  const { acceptResult, claimJob } = await import("../src/capture-jobs/store");
+  const { transitionFirstPass } = await import("../src/capture-jobs/plan");
+  const { id, result, original } = await planningFixture();
+  await acceptResult(db, result, now + 1);
+  const next = (await transitionFirstPass(autoEnv(), id, now + 2))!;
+  const lease = crypto.randomUUID();
+  const claim = (
+    await claimJob(db, { request_id: lease, job_kind: "cut" }, now + 3)
+  ).claim;
+  expect(claim?.kind).toBe("cut");
+  const derivative = {
+    clip_id: next.requestId + "-a1",
+    parent_clip_id: "fixture-parent",
+    source_long_clip_id: null,
+    ref: "new-review/" + next.requestId + "-a1.mp4",
+    sha256: "f".repeat(64),
+    source_sha256: "a".repeat(64),
+    size_bytes: 100,
+    duration_seconds: 30,
+    local_in_seconds: 10,
+    local_out_seconds: 40,
+    ready: false,
+    approval: "unreviewed",
+  };
+  const delivery = {
+    delivery_id: crypto.randomUUID(),
+    job_id: next.requestId,
+    lease_id: lease,
+    state: "needs_review",
+    attempt: 1,
+    code: "CUT_READY_FOR_REVIEW",
+    result: derivative,
+  };
+  await acceptResult(db, delivery, now + 4);
+  expect(
+    JSON.parse((await readCut(db, next.requestId))!.derivative_json!),
+  ).toEqual(derivative);
+  expect((await readCut(db, id))!.request_json).toBe(original);
+  expect((await readCut(db, id))!.derivative_json).toBeNull();
+  expect(
+    sqlite.prepare("SELECT status FROM inventory_reviews").get()?.status,
+  ).toBe("cut_down");
+  expect(await transitionFirstPass(autoEnv(), id, now + 5)).toEqual(next);
 });

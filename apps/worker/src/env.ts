@@ -15,6 +15,7 @@ export interface Env {
   CUT_REQUESTS_ENABLED?: string;
   CUT_JOBS_ENABLED?: string;
   CUT_PLANNING_ENABLED?: string;
+  CUT_FIRST_PASS_AUTO_ENABLED?: string;
   CAPTURE_JOBS_GRANT_OPERATIONS?: string;
   // Private activation config only; intentionally absent from tracked wrangler vars.
   INVENTORY_INGEST_ENABLED?: string;

@@ -29,6 +29,7 @@ export interface InventoryProducerRecord {
 }
 export interface InventoryCutRequest {
   requestId: string;
+  sourcePlanRequestId?: string | null;
   parentItemId: string;
   parentVersion: string;
   reviewRevision: number;

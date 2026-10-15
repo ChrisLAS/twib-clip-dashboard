@@ -1,7 +1,8 @@
+import type { Env } from "../env";
 import { HttpError } from "../errors";
 import { INVENTORY_SOURCE, sha256 } from "../inventory/contract";
-import { eligibility, readCut } from "./cut";
-import { planWireSchema, proposalSchema } from "./cut-contract";
+import { eligibility, readCut, planningEnabled, executionEnabled } from "./cut";
+import { cutWireSchema, planWireSchema, proposalSchema } from "./cut-contract";
 import { resultSchema } from "./contract";
 
 const conflict = () =>
@@ -163,4 +164,123 @@ export async function acceptPlanResult(
     .first<{ request_json: string; response_json: string }>();
   if (saved?.request_json !== wire) throw conflict();
   return JSON.parse(saved.response_json) as unknown;
+}
+
+// Internal transition, called only after authenticated plan receipt and BOTH
+// operation grants plus all planning/execution/automatic gates. No owner session
+// is impersonated, and no review status is approved or revision advanced.
+export async function transitionFirstPass(
+  env: Env,
+  planId: string,
+  now = Date.now(),
+) {
+  if (
+    env.CUT_FIRST_PASS_AUTO_ENABLED !== "true" ||
+    !planningEnabled(env) ||
+    !executionEnabled(env)
+  )
+    return null;
+  const db = env.DB;
+  const cut = await readCut(db, planId);
+  if (!cut || !cut.proposal_json) throw conflict();
+  const original = cutWireSchema.parse(JSON.parse(cut.request_json));
+  if (original.spec.kind !== "first_pass") return null;
+  const proposal = proposalSchema.parse(JSON.parse(cut.proposal_json));
+  if (
+    proposal.requestRevision !== (await sha256(cut.request_json)) ||
+    proposal.sourceSha256 !== original.parent.sha256 ||
+    proposal.range.kind !== "range"
+  )
+    throw conflict();
+  const hash = await sha256(
+    "first-pass-derivative/v1:" + planId + ":" + proposal.binding,
+  );
+  const id =
+    hash.slice(0, 8) +
+    "-" +
+    hash.slice(8, 12) +
+    "-4" +
+    hash.slice(13, 16) +
+    "-8" +
+    hash.slice(17, 20) +
+    "-" +
+    hash.slice(20, 32);
+  const request = JSON.stringify(
+    cutWireSchema.parse({
+      ...original,
+      job_id: id,
+      spec: proposal.range,
+      editorial: {
+        planJobId: planId,
+        binding: proposal.binding,
+        contextRevision: proposal.contextRevision,
+        requestRevision: proposal.requestRevision,
+      },
+    }),
+  );
+  const previous = await readCut(db, id);
+  if (previous) {
+    if (
+      previous.source_plan_request_id !== planId ||
+      previous.request_json !== request
+    )
+      throw conflict();
+    return { requestId: id, sourcePlanRequestId: planId };
+  }
+  const { episode, obs, duplicateId } = await eligibility(db, cut);
+  const guard = `EXISTS(SELECT 1 FROM inventory_cut_requests WHERE request_id=? AND request_json=? AND proposal_json=?)
+    AND EXISTS(SELECT 1 FROM inventory_observations o WHERE source_id=? AND episode_id=? AND item_id=? AND receipt_id=? AND sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence))
+    AND EXISTS(SELECT 1 FROM inventory_reviews WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?)
+    AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`;
+  const bindings = [
+    planId,
+    cut.request_json,
+    cut.proposal_json,
+    INVENTORY_SOURCE,
+    episode,
+    cut.item_id,
+    obs.receipt_id,
+    obs.sequence,
+    INVENTORY_SOURCE,
+    episode,
+    cut.item_id,
+    cut.review_revision,
+    cut.parent_version,
+    INVENTORY_SOURCE,
+    episode,
+    cut.item_id,
+    duplicateId,
+  ];
+  await db.batch([
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO inventory_cut_requests(request_id,item_id,owner,parent_version,review_revision,request_json,state,source_plan_request_id,created_at,updated_at) SELECT ?,?,?,?,?,?,'queued',?,?,? WHERE ${guard}`,
+      )
+      .bind(
+        id,
+        cut.item_id,
+        cut.owner,
+        cut.parent_version,
+        cut.review_revision,
+        request,
+        planId,
+        now,
+        now,
+        ...bindings,
+      ),
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO capture_jobs(job_id,request_json,owner,state,operation,created_at,updated_at) SELECT ?,?,?,'queued','capture',?,? WHERE EXISTS(SELECT 1 FROM inventory_cut_requests WHERE request_id=? AND source_plan_request_id=? AND request_json=?) AND ${guard}`,
+      )
+      .bind(id, request, cut.owner, now, now, id, planId, request, ...bindings),
+  ]);
+  const saved = await readCut(db, id);
+  if (
+    !saved ||
+    saved.source_plan_request_id !== planId ||
+    saved.request_json !== request ||
+    saved.exec_state !== "queued"
+  )
+    throw conflict();
+  return { requestId: id, sourcePlanRequestId: planId };
 }

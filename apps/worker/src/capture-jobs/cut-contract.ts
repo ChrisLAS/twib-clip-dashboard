@@ -71,6 +71,18 @@ export const cutWireSchema = z
     reported_by: z.literal("chad"),
     parent: cutParentSchema,
     spec: cutSpecSchema,
+    editorial: z
+      .object({
+        planJobId: z
+          .string()
+          .uuid()
+          .regex(/^[0-9a-f-]+$/),
+        binding: z.string().regex(/^[a-f0-9]{64}$/),
+        contextRevision: z.string().regex(/^[a-f0-9]{64}$/),
+        requestRevision: z.string().regex(/^[a-f0-9]{64}$/),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export const derivativeSchema = z
@@ -106,7 +118,7 @@ export const planWireSchema = cutWireSchema
       .strict(),
   })
   .refine(
-    (v) => v.spec.kind !== "range" && v.parent.sha256 !== null,
+    (v) => v.spec.kind !== "range" && v.parent.sha256 !== null && !v.editorial,
     "Planning requires source proof and a non-range request",
   );
 export const proposalSchema = z

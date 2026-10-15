@@ -1,3 +1,4 @@
+import { transitionFirstPass } from "./plan";
 import { requireKind } from "./scope";
 import { claimSchema, resultSchema } from "./contract";
 import type { Env } from "../env";
@@ -79,5 +80,11 @@ export async function machineJobs(request: Request, env: Env) {
         ? "cut"
         : "capture",
   );
-  return json(await acceptResult(env.DB, result));
+  const ack = await acceptResult(env.DB, result);
+  if (
+    JSON.parse(job.request_json).kind === "plan" &&
+    result.code === "EDITORIAL_PROPOSAL_READY"
+  )
+    await transitionFirstPass(env, result.job_id);
+  return json(ack);
 }

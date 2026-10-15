@@ -140,6 +140,7 @@ type Row = {
   derivative_json: string | null;
   code: string | null;
   proposal_json?: string | null;
+  source_plan_request_id?: string | null;
   exec_state?: string | null;
   exec_code?: string | null;
 };
@@ -147,6 +148,7 @@ export function cutView(row: Row) {
   const wire = cutWireSchema.parse(JSON.parse(row.request_json));
   return {
     requestId: row.request_id,
+    sourcePlanRequestId: row.source_plan_request_id ?? null,
     parentItemId: row.item_id,
     parentVersion: row.parent_version,
     reviewRevision: row.review_revision,
