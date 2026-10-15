@@ -47,6 +47,8 @@ const schema = z
           .object({
             payload: payloadSchema,
             status: z.enum(["pending", "saved", "rejected"]),
+            // Missing in older v1 outboxes: conservatively treat as attempted.
+            attempted: z.boolean().optional(),
             receipt: z
               .object({
                 state: z.string().max(100),
@@ -116,7 +118,8 @@ export function writeOutbox(
       JSON.stringify(value.entries.map((e) => e.payload)) ||
       prior.entries.some(
         (e, i) =>
-          e.status !== "pending" && e.status !== value.entries[i]?.status,
+          (e.status !== "pending" && e.status !== value.entries[i]?.status) ||
+          (e.attempted !== false && value.entries[i]?.attempted === false),
       ))
   )
     throw new Error(
@@ -134,7 +137,11 @@ export function newOutbox(
   return schema.parse({
     schema: 1,
     ...scope,
-    entries: payloads.map((payload) => ({ payload, status: "pending" })),
+    entries: payloads.map((payload) => ({
+      payload,
+      status: "pending",
+      attempted: false,
+    })),
   });
 }
 export function clearOutbox(storage: Storage, scope: BatchScope) {

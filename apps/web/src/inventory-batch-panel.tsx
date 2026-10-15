@@ -95,6 +95,8 @@ export function InventoryBatchPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [storageError, setStorageError] = useState(initial.error);
+  const liveBlockedIds = useRef(blockedIds);
+  liveBlockedIds.current = blockedIds;
   const running = useRef(false),
     mounted = useRef(true);
   useEffect(() => {
@@ -151,9 +153,10 @@ export function InventoryBatchPanel({
       if (
         selected.some(
           (entry) =>
+            !existing &&
             !entry.saved &&
             !entry.rejected &&
-            blockedIds.includes(entry.record.id),
+            liveBlockedIds.current.includes(entry.record.id),
         )
       )
         throw new Error(
@@ -163,7 +166,7 @@ export function InventoryBatchPanel({
         if (entry.payload) return entry;
         const current = items.find((item) => item.id === entry.record.id);
         if (
-          blockedIds.includes(entry.record.id) ||
+          liveBlockedIds.current.includes(entry.record.id) ||
           (current &&
             (current.review?.revision !== entry.record.review?.revision ||
               current.review?.version !== entry.record.review?.version ||
@@ -209,7 +212,10 @@ export function InventoryBatchPanel({
       const operation = box.entries[i];
       if (!mounted.current) break;
       if (operation.status !== "pending") continue;
-      if (blockedIds.includes(operation.payload.itemId)) {
+      if (
+        operation.attempted === false &&
+        liveBlockedIds.current.includes(operation.payload.itemId)
+      ) {
         setError(
           "An unsaved row review blocks this operation. Finish that draft before reconciling the batch.",
         );
@@ -223,6 +229,10 @@ export function InventoryBatchPanel({
         const current = readOutbox(localStorage, scope);
         if (JSON.stringify(current) !== JSON.stringify(box))
           throw new Error("Outbox changed");
+        // Durable attempt marker distinguishes safe reconciliation from a first dispatch.
+        // No await occurs between the live-draft check, persistence and dispatch.
+        operation.attempted = true;
+        writeOutbox(localStorage, scope, box);
       } catch {
         setStorageError(
           "Batch storage changed or became unavailable. Submission stopped; restore storage and reload to reconcile.",

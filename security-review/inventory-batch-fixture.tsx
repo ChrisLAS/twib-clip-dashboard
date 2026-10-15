@@ -47,7 +47,12 @@ const items = [1, 2, 3].map((n) => ({
 api.inventoryReview = async (input) => {
   state.writes.push(structuredClone(input));
   sessionStorage.setItem("fixture-writes", JSON.stringify(state.writes));
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  await new Promise((resolve) =>
+    setTimeout(
+      resolve,
+      Number(sessionStorage.getItem("fixture-delay-ms") ?? "80"),
+    ),
+  );
   if (state.rejectNext) {
     state.rejectNext = false;
     throw new RequestError("Source changed", 409);

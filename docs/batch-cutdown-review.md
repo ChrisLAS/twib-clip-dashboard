@@ -9,7 +9,7 @@ This slice builds on draft PR 6, exact base `5f1ac28`. It is not deployed or act
 - Original notes are preserved. Nothing in the batch UI overwrites media, marks a derivative approved, or changes production ordering. Existing per-request provenance and derivative references remain in row review history.
 - Before the first POST, all immutable operation payloads/UUIDs are durably written and read back in an authenticated owner/source/episode-scoped browser outbox. Only schema, scope, request payloads and minimal outcome receipts are stored; no CSRF token or full inventory record is stored.
 - Reload restores pending, confirmed and unsent items. Reconciliation replays the same operation UUID/payload through the existing server idempotency receipt mechanism; confirmed items are skipped. An unresolved batch blocks creating another. Corrupt, unavailable or mismatched storage fails closed; Web Locks prevent cooperating tabs from racing submissions.
-- Unsaved row-draft protection uses the complete source/episode draft registry, not the visible page. Account changes remount the inventory workspace and do not restore another owner's outbox.
+- Unsaved row-draft protection uses the complete source/episode draft registry, not the visible page. A live ref is rechecked immediately before every never-attempted dispatch, including after an earlier asynchronous save. A durable monotonic attempt marker preserves exact replay for already-attempted operations while newly drafted later items remain unsent. Account changes remount the inventory workspace and do not restore another owner's outbox.
 
 ## Verification
 

@@ -52,6 +52,12 @@ describe("durable batch outbox", () => {
       readOutbox(s, scope)?.entries.every((e) => e.status === "pending"),
     ).toBe(true);
     expect(s.getItem(outboxKey(scope))).not.toContain("csrf");
+    expect(box.entries[0].attempted).toBe(false);
+    box.entries[0].attempted = true;
+    writeOutbox(s, scope, box);
+    const unattempted = structuredClone(box);
+    unattempted.entries[0].attempted = false;
+    expect(() => writeOutbox(s, scope, unattempted)).toThrow("immutable");
     const altered = structuredClone(box);
     altered.entries[0].payload.operationId =
       "00000000-0000-4000-8000-000000000099";

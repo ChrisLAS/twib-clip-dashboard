@@ -39,6 +39,55 @@ async function settled(p) {
 try {
   for (const width of [1440, 390]) {
     for (const mode of ["lost", "midbatch"]) {
+      const race = await pageFor(width);
+      await race.getByRole("checkbox").nth(1).check();
+      await race.getByRole("checkbox").nth(0).check();
+      await race.evaluate(() =>
+        sessionStorage.setItem("fixture-delay-ms", "1200"),
+      );
+      await race.getByRole("button", { name: "Save cutdown requests" }).click();
+      await race.waitForFunction(() => window.writes.length === 1);
+      await race.getByRole("button", { name: "Draft first clip" }).click();
+      await race
+        .getByRole("button", { name: "Retry unconfirmed requests" })
+        .waitFor();
+      assert.equal(await race.evaluate(() => window.writes.length), 1);
+      assert.match(
+        await race.getByText(/An unsaved row review blocks/).innerText(),
+        /unsaved/,
+      );
+      const held = await race.evaluate(() =>
+        JSON.parse(
+          localStorage.getItem(
+            Object.keys(localStorage).find((k) =>
+              k.startsWith("twib.batch-outbox"),
+            ),
+          ),
+        ),
+      );
+      assert.deepEqual(
+        held.entries.map((e) => e.attempted),
+        [true, false],
+      );
+      // Reconcile the previously attempted item with its exact payload while the
+      // later unattempted item remains blocked by the new draft.
+      await race.evaluate(() =>
+        sessionStorage.setItem("fixture-delay-ms", "80"),
+      );
+      await race
+        .getByRole("button", { name: "Retry unconfirmed requests" })
+        .click();
+      await race.waitForFunction(() => window.writes.length === 2);
+      await race
+        .getByRole("button", { name: "Retry unconfirmed requests" })
+        .waitFor();
+      const attempts = await race.evaluate(() => window.writes);
+      assert.deepEqual(attempts[0], attempts[1]);
+      assert.equal(
+        attempts.filter((p) => p.itemId === "item_" + "1".repeat(64)).length,
+        0,
+      );
+      await race.close();
       const p = await pageFor(width);
       await p.getByRole("checkbox").nth(0).check();
       await p.getByRole("checkbox").nth(1).check();
