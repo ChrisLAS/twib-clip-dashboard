@@ -1,5 +1,14 @@
 import { z } from "zod";
+// A first pass requests editorial planning; it is never an executable range.
+// Context revisions are resolved by the trusted planning adapter, never the client.
 export const cutSpecSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("first_pass"),
+      guidance: z.string().trim().min(1).max(2000).optional(),
+      startSeconds: z.number().finite().min(0).max(86400).optional(),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("range"),

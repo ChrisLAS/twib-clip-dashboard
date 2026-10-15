@@ -138,7 +138,13 @@ export function cutView(row: Row) {
       row.derivative_json || row.state === "failed"
         ? row.state
         : (row.exec_state ?? row.state),
-    code: row.exec_code ?? row.code,
+    // This inventory protocol has no episode brief snapshot transport yet.
+    // Do not claim a first pass is planning or invent a context revision.
+    code:
+      row.exec_code ??
+      row.code ??
+      (wire.spec.kind === "first_pass" ? "CONTEXT_MISSING" : null),
+    contextRevision: null,
     spec: wire.spec,
     parent: wire.parent,
     derivative: row.derivative_json

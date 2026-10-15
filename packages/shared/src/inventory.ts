@@ -34,6 +34,7 @@ export interface InventoryCutRequest {
   reviewRevision: number;
   state: string;
   code: string | null;
+  contextRevision: string | null;
   spec: NonNullable<InventoryReviewInput["cutSpec"]>;
   parent: {
     item_id: string;
@@ -75,7 +76,8 @@ export interface InventoryReview {
 export interface InventoryReviewInput {
   cutSpec?:
     | { kind: "range"; startSeconds: number; endSeconds: number }
-    | { kind: "editorial"; guidance: string; startSeconds?: number };
+    | { kind: "editorial"; guidance: string; startSeconds?: number }
+    | { kind: "first_pass"; guidance?: string; startSeconds?: number };
   operationId: string;
   episodeNumber: number;
   itemId: string;
