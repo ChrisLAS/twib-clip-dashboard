@@ -309,6 +309,40 @@ describe("isolated authenticated connection probe", () => {
     expect((await start({}, wrongOwnerJwt)).response.status).toBe(401);
     expect((await start({}, "")).response.status).toBe(401);
   });
+  it("preserves the browser Origin for consent form POSTs without cross-site referrers", async () => {
+    const started = await start();
+    expect(started.response.status).toBe(200);
+    expect(started.response.headers.get("Referrer-Policy")).toBe("same-origin");
+    expect(started.response.headers.get("Content-Security-Policy")).toContain(
+      "form-action 'self'",
+    );
+    expect(await started.response.text()).toContain(
+      '<form method="post" action="/authorize">',
+    );
+  });
+  it.each([undefined, "null", "https://evil.example", "https://chatgpt.com"])(
+    "rejects consent POSTs with untrusted Origin %s even with a valid owner and browser-bound handle",
+    async (origin) => {
+      const started = await start();
+      const handle = /name="handle" value="([^"]+)"/.exec(
+        await started.response.text(),
+      )![1];
+      const cookie = started.response.headers.get("Set-Cookie")!.split(";")[0];
+      const headers: Record<string, string> = {
+        "Cf-Access-Jwt-Assertion": ownerJwt,
+        Cookie: cookie,
+        "Content-Type": "application/x-www-form-urlencoded",
+      };
+      if (origin !== undefined) headers.Origin = origin;
+      const response = await req("/authorize", {
+        method: "POST",
+        headers,
+        body: new URLSearchParams({ handle, decision: "approve" }),
+      });
+      expect(response.status).toBe(403);
+      expect(await response.text()).toBe("Invalid origin");
+    },
+  );
   it.each<Record<string, string>>([
     { code_challenge_method: "plain" },
     { resource: "https://other.example/mcp" },
