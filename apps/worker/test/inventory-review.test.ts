@@ -45,6 +45,7 @@ beforeEach(() => {
     "0012_capture_jobs.sql",
     "0013_inventory_review.sql",
     "0014_inventory_cut_requests.sql",
+    "0015_inventory_cut_planning.sql",
   ])
     sqlite.exec(
       readFileSync(new URL("../migrations/" + name, import.meta.url), "utf8"),
@@ -716,4 +717,142 @@ it("duration filtering is strictly over 300 seconds before paginated numeric sor
     direction: "asc",
   });
   expect(end.items.at(-1)?.id).toBe(unknown.id);
+});
+
+async function planningFixture() {
+  const { claimJob } = await import("../src/capture-jobs/store");
+  const item = media(1, "long-original.mp4");
+  item.media!.duration_seconds = 900;
+  await accept([item]);
+  const review = await save(item, "cut_down", 0, {
+    cutSpec: { kind: "first_pass", guidance: "Keep the complete thought" },
+  });
+  const id = review.cutRequestId!;
+  const original = (await readCut(db, id))!.request_json;
+  await enqueueCut(db, id, "synthetic-owner", now, true);
+  const lease = crypto.randomUUID();
+  const response = await claimJob(
+    db,
+    { request_id: lease, job_kind: "plan" },
+    now,
+  );
+  if (response.claim?.kind !== "plan") throw new Error("Expected plan claim");
+  const proposal = {
+    binding: "b".repeat(64),
+    contextRevision: "c".repeat(64),
+    requestRevision: response.claim.planning.requestRevision,
+    transcriptRevision: "d".repeat(64),
+    sourceSha256: "a".repeat(64),
+    range: { kind: "range", startSeconds: 10, endSeconds: 40 },
+    rationale: "A complete point with its qualification.",
+    ready: false,
+    approval: "unreviewed",
+  };
+  const result = {
+    delivery_id: crypto.randomUUID(),
+    job_id: id,
+    lease_id: lease,
+    state: "needs_review",
+    attempt: 1,
+    code: "EDITORIAL_PROPOSAL_READY",
+    proposal,
+  };
+  return { item, id, lease, original, proposal, result };
+}
+it("planning request claims separately, saves immutable proposal, replays, and requires a new explicit range decision", async () => {
+  const { acceptResult, claimJob } = await import("../src/capture-jobs/store");
+  const { proposalRange } = await import("../src/capture-jobs/plan");
+  const { item, id, original, result } = await planningFixture();
+  expect(
+    (
+      await claimJob(
+        db,
+        { request_id: crypto.randomUUID(), job_kind: "cut" },
+        now,
+      )
+    ).claim,
+  ).toBeNull();
+  const ack = await acceptResult(db, result, now + 1);
+  expect(await acceptResult(db, result, now + 2)).toEqual(ack);
+  const eligible = await proposalRange(db, id, "synthetic-owner");
+  expect(eligible.proposal.range).toEqual(result.proposal.range);
+  expect((await readCut(db, id))!.request_json).toBe(original);
+  expect((await readCut(db, id))!.derivative_json).toBeNull();
+  await expect(proposalRange(db, id, "other-owner")).rejects.toMatchObject({
+    code: "PLAN_CONFLICT",
+  });
+  await expect(
+    acceptResult(db, { ...result, delivery_id: crypto.randomUUID() }, now + 2),
+  ).rejects.toMatchObject({ code: "PLAN_CONFLICT" });
+  await expect(
+    acceptResult(
+      db,
+      { ...result, proposal: { ...result.proposal, rationale: "changed" } },
+      now + 2,
+    ),
+  ).rejects.toMatchObject({ code: "PLAN_CONFLICT" });
+  // Separate owner-authorized range decision, using latest version/revision, remains mandatory.
+  const range = await save(item, "cut_down", 1, {
+    cutSpec: eligible.proposal.range,
+  });
+  await enqueueCut(db, range.cutRequestId!, "synthetic-owner", now + 3);
+  await expect(proposalRange(db, id, "synthetic-owner")).rejects.toMatchObject({
+    code: "CUT_REQUEST_CONFLICT",
+  });
+  expect(sqlite.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(
+    2,
+  );
+});
+it.each([
+  "source",
+  "review",
+  "expired",
+  "source-hash",
+  "request-hash",
+  "range",
+  "lease",
+])("planning receipt rejects %s without saving a proposal", async (reason) => {
+  const { acceptResult } = await import("../src/capture-jobs/store");
+  const { item, id, result } = await planningFixture();
+  if (reason === "source") {
+    item.media!.size_bytes = 2000;
+    await accept([item]);
+  }
+  if (reason === "review") await save(item, "rejected", 1);
+  if (reason === "source-hash") result.proposal.sourceSha256 = "e".repeat(64);
+  if (reason === "request-hash")
+    result.proposal.requestRevision = "e".repeat(64);
+  if (reason === "range")
+    result.proposal.range = {
+      kind: "range",
+      startSeconds: 890,
+      endSeconds: 950,
+    };
+  if (reason === "lease") result.lease_id = crypto.randomUUID();
+  await expect(
+    acceptResult(db, result, reason === "expired" ? now + 7200001 : now + 1),
+  ).rejects.toBeTruthy();
+  expect((await readCut(db, id))!.proposal_json).toBeNull();
+  expect(
+    sqlite.prepare("SELECT count(*) n FROM capture_job_deliveries").get()?.n,
+  ).toBe(0);
+});
+it("planning receipt transaction rejects a concurrent superseding decision", async () => {
+  const { acceptResult } = await import("../src/capture-jobs/store");
+  const { id, result } = await planningFixture();
+  const raced = {
+    ...db,
+    batch: async (statements: D1PreparedStatement[]) => {
+      sqlite
+        .prepare(
+          "UPDATE inventory_reviews SET revision=revision+1 WHERE item_id=(SELECT item_id FROM inventory_cut_requests WHERE request_id=?)",
+        )
+        .run(id);
+      return db.batch(statements);
+    },
+  } as D1Database;
+  await expect(acceptResult(raced, result, now + 1)).rejects.toMatchObject({
+    code: "PLAN_CONFLICT",
+  });
+  expect((await readCut(db, id))!.proposal_json).toBeNull();
 });

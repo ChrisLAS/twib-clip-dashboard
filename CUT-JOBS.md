@@ -38,3 +38,22 @@ Partial publication/history failures park for operator reconciliation; no automa
 ## Verified nonsecret rollout prerequisites
 
 Read-only production settings inspection on 2026-10-14 found inventory ingestion false; all cut/job gates, job audience/client configuration and bounded job grant fields absent. The current dashboard origin had only owner-review and inventory Access applications, with no matching job-path app. Inventory policy contains a service-token selector; the known Nomad inventory credential file is a regular owner-only0600 chrisf file (metadata only, no contents read). Existing inventory identity may be reusable only after separate job-app/policy and bounded cut-only grant approval; credential validity and job authentication have not been tested. Request-only rollout needs no machine credential. Reverify metadata before any live action.
+
+## Disabled editorial planning transport
+
+Migration `0015_inventory_cut_planning.sql` adds a nullable immutable proposal receipt to existing requests. It does not alter prior migrations, source media, existing grants, or deployed configuration. `CUT_PLANNING_ENABLED` is absent/default closed; planning additionally requires cut requests, capture transport, and an explicit `plan` operation grant. `cut` and `capture` grants do not confer planning authority. Canonical grants can include `capture,plan`, `cut,plan`, or `capture,cut,plan` only when separately authorized.
+
+A first-pass/editorial review stores the original immutable cut request. When planning is enabled, the server queues a separate `kind:plan` wire with `planning.parentVersion`, `reviewRevision`, and SHA256 of the exact original request JSON bytes as `requestRevision`. This wire is claimable only through `job_kind:plan`; it can never enter the range-cut queue. Nomad supplies the trusted local narrative/transcript context, and returns only a proposal and revision digests. Transcript excerpts are not uploaded to this dashboard.
+
+`EDITORIAL_PROPOSAL_READY` is a `needs_review` receipt, not execution or approval. Proposals contain a complete <=180-second range, rationale, source hash and request/context/transcript/binding revisions, `ready:false`, and `approval:unreviewed`. The server verifies source/request identity, lease validity, current observation and review revision, and atomically saves the immutable receipt. Exact delivery retries are idempotent; altered delivery IDs/bodies, stale decisions/sources, and revoked operation grants fail closed. Context and transcript digests are authenticated adapter assertions, not independently reconstructed server-side.
+
+Owner-only `GET /api/inventory/plan-requests/{requestId}/proposal` rechecks current source/review eligibility. It does not approve a plan or execute media work. The owner can submit a new range cut decision using the current source version and review revision; ordinary cut grants/gates and derivative checks still apply. The requested finished-first-pass workflow still needs a bounded server-side transition from proposal to range, tied to the original first-pass authorization, exact source/context bindings, a separate execution gate/grant, and durable idempotency. Do not implement that transition by impersonating an owner session. This receiver checkpoint does not perform that automatic transition. Neither planning nor cutting marks the derivative editorially approved. This implementation does not introduce automatic proposal approval, plan retry, or background source mutation. Originals remain untouched.
+
+### Rollout approval checklist (not performed)
+
+- Review and approve both dashboard and Nomad commits and the migration before deployment.
+- Separately authorize any service-token/Access permission expansion to `plan`; existing credentials are unchanged here.
+- Approve the selected planning provider and the bounded context/transcript data it will receive; configure its existing secure credentials through the supported owner flow.
+- Approve activation of the independent dashboard and Nomad planning/provider gates, with verified authoritative local context and source hashes.
+- Run an explicitly authorized single planning pilot and review its proposal. Approve any actual range derivative separately. Do not infer rollout or media execution approval from offline tests.
+- Disable planning gates to stop new claims/receipts; retained requests and receipts remain available for review. Never delete history as a rollback step.

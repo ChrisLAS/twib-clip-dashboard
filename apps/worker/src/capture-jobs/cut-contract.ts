@@ -92,3 +92,33 @@ export const derivativeSchema = z
     approval: z.literal("unreviewed"),
   })
   .strict();
+
+const digest = z.string().regex(/^[a-f0-9]{64}$/);
+export const planWireSchema = cutWireSchema
+  .extend({
+    kind: z.literal("plan"),
+    planning: z
+      .object({
+        parentVersion: digest,
+        reviewRevision: z.number().int().positive(),
+        requestRevision: digest,
+      })
+      .strict(),
+  })
+  .refine(
+    (v) => v.spec.kind !== "range" && v.parent.sha256 !== null,
+    "Planning requires source proof and a non-range request",
+  );
+export const proposalSchema = z
+  .object({
+    binding: digest,
+    contextRevision: digest,
+    requestRevision: digest,
+    transcriptRevision: digest,
+    sourceSha256: digest,
+    range: cutSpecSchema.refine((v) => v.kind === "range"),
+    rationale: z.string().trim().min(1).max(2000),
+    ready: z.literal(false),
+    approval: z.literal("unreviewed"),
+  })
+  .strict();

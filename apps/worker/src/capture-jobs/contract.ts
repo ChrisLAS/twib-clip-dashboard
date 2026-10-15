@@ -1,4 +1,9 @@
-import { cutWireSchema, derivativeSchema } from "./cut-contract";
+import {
+  cutWireSchema,
+  planWireSchema,
+  derivativeSchema,
+  proposalSchema,
+} from "./cut-contract";
 import { z } from "zod";
 const uuid = z
   .string()
@@ -36,7 +41,10 @@ export const createJobSchema = z
   })
   .strict();
 export const claimSchema = z
-  .object({ request_id: uuid, job_kind: z.enum(["capture", "cut"]).optional() })
+  .object({
+    request_id: uuid,
+    job_kind: z.enum(["capture", "cut", "plan"]).optional(),
+  })
   .strict();
 export const retrySchema = z.object({ retry_id: uuid }).strict();
 export const resultSchema = z
@@ -53,6 +61,7 @@ export const resultSchema = z
     ]),
     attempt: z.number().int().min(0).max(100),
     result: derivativeSchema.optional(),
+    proposal: proposalSchema.optional(),
     code: z
       .string()
       .regex(/^[A-Za-z0-9_]{1,80}$/)
@@ -74,7 +83,9 @@ export type CaptureClaim = {
 };
 export type Claim =
   | CaptureClaim
-  | (z.infer<typeof cutWireSchema> & { url?: never } & Pick<
+  | (z.infer<typeof cutWireSchema | typeof planWireSchema> & {
+      url?: never;
+    } & Pick<
         CaptureClaim,
         "operation" | "retry_id" | "lease_id" | "lease_expires_at" | "executor"
       >);

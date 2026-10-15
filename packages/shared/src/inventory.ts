@@ -35,6 +35,17 @@ export interface InventoryCutRequest {
   state: string;
   code: string | null;
   contextRevision: string | null;
+  proposal?: {
+    binding: string;
+    contextRevision: string;
+    requestRevision: string;
+    transcriptRevision: string;
+    sourceSha256: string;
+    range: { kind: "range"; startSeconds: number; endSeconds: number };
+    rationale: string;
+    ready: false;
+    approval: "unreviewed";
+  } | null;
   spec: NonNullable<InventoryReviewInput["cutSpec"]>;
   parent: {
     item_id: string;
@@ -167,6 +178,7 @@ export interface InventoryReadItem {
 export interface InventoryResponse {
   cutRequestsEnabled?: boolean;
   cutExecutionEnabled?: boolean;
+  cutPlanningEnabled?: boolean;
   sourceId: string;
   episodeId: string;
   episodeNumber: number | null;

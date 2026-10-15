@@ -1,3 +1,4 @@
+import { acceptPlanResult } from "./plan";
 import { cutWireSchema, derivativeSchema } from "./cut-contract";
 import { HttpError } from "../errors";
 import {
@@ -81,7 +82,7 @@ export async function retryJob(
   const current = await read(db, id);
   if (
     current &&
-    JSON.parse(current.request_json).kind === "cut" &&
+    ["cut", "plan"].includes(JSON.parse(current.request_json).kind) &&
     !eligibility
   )
     throw conflict();
@@ -199,6 +200,10 @@ export async function acceptResult(
 ) {
   const input = resultSchema.parse(value),
     wire = JSON.stringify(input);
+  const identity = await read(db, input.job_id);
+  if (identity && JSON.parse(identity.request_json).kind === "plan")
+    return acceptPlanResult(db, input, now);
+  if (input.proposal) throw conflict();
   const old = await db
     .prepare(
       "SELECT request_json,response_json FROM capture_job_deliveries WHERE delivery_id=?",

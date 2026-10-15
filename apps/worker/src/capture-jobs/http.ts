@@ -73,7 +73,11 @@ export async function machineJobs(request: Request, env: Env) {
     );
   requireKind(
     env,
-    JSON.parse(job.request_json).kind === "cut" ? "cut" : "capture",
+    JSON.parse(job.request_json).kind === "plan"
+      ? "plan"
+      : JSON.parse(job.request_json).kind === "cut"
+        ? "cut"
+        : "capture",
   );
   return json(await acceptResult(env.DB, result));
 }

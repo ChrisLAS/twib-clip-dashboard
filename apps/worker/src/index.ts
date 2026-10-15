@@ -1,7 +1,9 @@
+import { proposalRange } from "./capture-jobs/plan";
 import { requireKind } from "./capture-jobs/scope";
 import {
   cutsEnabled,
   executionEnabled,
+  planningEnabled,
   attachCuts,
   enqueueCut,
   retryCut,
@@ -196,6 +198,19 @@ export default {
             ? await retryCut(env.DB, id, await body(request), owner)
             : await enqueueCut(env.DB, id, owner),
         );
+      } else if (
+        /^\/api\/inventory\/plan-requests\/[0-9a-f-]{36}\/proposal$/.test(
+          path,
+        ) &&
+        method === "GET"
+      ) {
+        if (demo)
+          throw new HttpError(
+            403,
+            "OWNER_REQUIRED",
+            "An owner session is required.",
+          );
+        result = json(await proposalRange(env.DB, path.split("/")[4], owner));
       } else if (path === "/api/capture-jobs" && method === "POST")
         result = json(await createJob(env.DB, await jobBody(request), owner));
       else if (path === "/api/capture-jobs" && method === "GET")
@@ -246,6 +261,7 @@ export default {
           ...inventory,
           cutRequestsEnabled: cutsEnabled(env) && !demo,
           cutExecutionEnabled: executionEnabled(env) && !demo,
+          cutPlanningEnabled: planningEnabled(env) && !demo,
         });
       } else if (path === "/api/inventory/review" && method === "POST") {
         const input = await body(request, 24000);
@@ -262,11 +278,21 @@ export default {
           );
         const review = await saveInventoryReview(env.DB, input, owner);
         if (review.cutRequestId) {
-          if (executionEnabled(env)) {
+          if (executionEnabled(env) || planningEnabled(env)) {
             const cut = await readCut(env.DB, review.cutRequestId);
-            if (cut && cutView(cut).spec.kind === "range") {
+            const isPlan = cut && cutView(cut).spec.kind !== "range";
+            if (
+              cut &&
+              (isPlan ? planningEnabled(env) : executionEnabled(env))
+            ) {
               try {
-                await enqueueCut(env.DB, review.cutRequestId, owner);
+                await enqueueCut(
+                  env.DB,
+                  review.cutRequestId,
+                  owner,
+                  Date.now(),
+                  Boolean(isPlan),
+                );
               } catch (error) {
                 if (!(error instanceof HttpError)) throw error;
                 review.cutQueueError = error.code;

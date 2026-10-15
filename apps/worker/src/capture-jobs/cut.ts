@@ -1,5 +1,12 @@
+import { sha256 } from "../inventory/contract";
 import { kindGranted } from "./scope";
-import { cutSpecSchema, cutWireSchema, derivativeSchema } from "./cut-contract";
+import {
+  cutSpecSchema,
+  cutWireSchema,
+  derivativeSchema,
+  planWireSchema,
+  proposalSchema,
+} from "./cut-contract";
 export { cutSpecSchema } from "./cut-contract";
 import type { InventoryItem } from "../inventory/contract";
 import { INVENTORY_SOURCE, inventoryEpisodeId } from "../inventory/contract";
@@ -9,6 +16,14 @@ import type { Env } from "../env";
 import { retryJob } from "./store";
 export function cutsEnabled(env: Env) {
   return env.CUT_REQUESTS_ENABLED === "true";
+}
+export function planningEnabled(env: Env) {
+  return (
+    cutsEnabled(env) &&
+    env.CAPTURE_JOBS_ENABLED === "true" &&
+    env.CUT_PLANNING_ENABLED === "true" &&
+    kindGranted(env, "plan")
+  );
 }
 export function executionEnabled(env: Env) {
   return (
@@ -124,6 +139,7 @@ type Row = {
   state: string;
   derivative_json: string | null;
   code: string | null;
+  proposal_json?: string | null;
   exec_state?: string | null;
   exec_code?: string | null;
 };
@@ -138,13 +154,19 @@ export function cutView(row: Row) {
       row.derivative_json || row.state === "failed"
         ? row.state
         : (row.exec_state ?? row.state),
-    // This inventory protocol has no episode brief snapshot transport yet.
-    // Do not claim a first pass is planning or invent a context revision.
+    // Revisions appear only after an authenticated proposal receipt.
     code:
       row.exec_code ??
       row.code ??
-      (wire.spec.kind === "first_pass" ? "CONTEXT_MISSING" : null),
-    contextRevision: null,
+      (!row.exec_state && wire.spec.kind === "first_pass"
+        ? "CONTEXT_MISSING"
+        : null),
+    contextRevision: row.proposal_json
+      ? proposalSchema.parse(JSON.parse(row.proposal_json)).contextRevision
+      : null,
+    proposal: row.proposal_json
+      ? proposalSchema.parse(JSON.parse(row.proposal_json))
+      : null,
     spec: wire.spec,
     parent: wire.parent,
     derivative: row.derivative_json
@@ -160,7 +182,7 @@ export async function readCut(db: D1Database, id: string) {
     .bind(id)
     .first<Row>();
 }
-async function eligibility(db: D1Database, row: Row) {
+export async function eligibility(db: D1Database, row: Row) {
   const episode = await inventoryEpisodeId(127);
   const obs = await db
     .prepare(
@@ -187,12 +209,30 @@ export async function enqueueCut(
   id: string,
   owner: string,
   now = Date.now(),
+  planning = false,
 ) {
   const row = await readCut(db, id);
   if (!row || row.owner !== owner) throw denied();
-  if (row.state !== "requested") return cutView(row);
+  if (
+    row.state !== "requested" &&
+    !(planning && row.state === "needs_review" && !row.exec_state)
+  )
+    return cutView(row);
   const wire = cutWireSchema.parse(JSON.parse(row.request_json));
-  if (wire.spec.kind !== "range") throw denied();
+  if ((wire.spec.kind !== "range") !== planning) throw denied();
+  const queuedWire = planning
+    ? JSON.stringify(
+        planWireSchema.parse({
+          ...wire,
+          kind: "plan",
+          planning: {
+            parentVersion: row.parent_version,
+            reviewRevision: row.review_revision,
+            requestRevision: await sha256(row.request_json),
+          },
+        }),
+      )
+    : row.request_json;
   if (!wire.parent.sha256)
     throw new HttpError(
       409,
@@ -207,7 +247,7 @@ export async function enqueueCut(
       )
       .bind(
         id,
-        row.request_json,
+        queuedWire,
         owner,
         now,
         now,
@@ -228,9 +268,9 @@ export async function enqueueCut(
       ),
     db
       .prepare(
-        "UPDATE inventory_cut_requests SET state='queued',updated_at=? WHERE request_id=? AND state='requested' AND EXISTS(SELECT 1 FROM capture_jobs WHERE job_id=? AND request_json=? AND owner=?)",
+        "UPDATE inventory_cut_requests SET state='queued',updated_at=? WHERE request_id=? AND state IN ('requested','needs_review') AND EXISTS(SELECT 1 FROM capture_jobs WHERE job_id=? AND request_json=? AND owner=?)",
       )
-      .bind(now, id, id, row.request_json, owner),
+      .bind(now, id, id, queuedWire, owner),
   ]);
   const next = await readCut(db, id);
   if (!next || next.state !== "queued") throw denied();

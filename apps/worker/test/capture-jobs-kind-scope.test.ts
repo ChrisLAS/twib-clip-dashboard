@@ -49,6 +49,7 @@ beforeEach(async () => {
   for (const file of [
     "0012_capture_jobs.sql",
     "0014_inventory_cut_requests.sql",
+    "0015_inventory_cut_planning.sql",
   ])
     raw.exec(
       readFileSync(new URL("../migrations/" + file, import.meta.url), "utf8"),
@@ -397,4 +398,65 @@ it("revoked cut execution gate denies receipt replay and claims before mutation"
   expect((await result(delivery)).status).toBe(503);
   expect((await claim({ request_id, job_kind: "cut" })).status).toBe(503);
   expect(snapshot()).toBe(stored);
+});
+it("plan is a distinct capability, closed by default, with no capture/cut fallback", async () => {
+  const before = snapshot();
+  expect(
+    (await claim({ request_id: crypto.randomUUID(), job_kind: "plan" })).status,
+  ).toBe(403);
+  env.CAPTURE_JOBS_GRANT_OPERATIONS = "plan";
+  expect(
+    (await claim({ request_id: crypto.randomUUID(), job_kind: "plan" })).status,
+  ).toBe(503);
+  expect(snapshot()).toBe(before);
+  env.CUT_PLANNING_ENABLED = "true";
+  expect(
+    (await claim({ request_id: crypto.randomUUID(), job_kind: "cut" })).status,
+  ).toBe(403);
+  expect((await claim({ request_id: crypto.randomUUID() })).status).toBe(403);
+  const response = await claim({
+    request_id: crypto.randomUUID(),
+    job_kind: "plan",
+  });
+  expect(response.status).toBe(200);
+  expect(((await response.json()) as { claim: unknown }).claim).toBeNull();
+});
+it("plan receipt replay is denied when scope or gate is revoked", async () => {
+  const plan = {
+    ...cut,
+    kind: "plan",
+    spec: { kind: "first_pass" },
+    planning: {
+      parentVersion: "a".repeat(64),
+      reviewRevision: 1,
+      requestRevision: "b".repeat(64),
+    },
+  };
+  raw
+    .prepare("UPDATE capture_jobs SET request_json=? WHERE job_id=?")
+    .run(JSON.stringify(plan), cutId);
+  const delivery = {
+    delivery_id: crypto.randomUUID(),
+    job_id: cutId,
+    lease_id: crypto.randomUUID(),
+    state: "needs_review",
+    attempt: 1,
+    code: "CONTEXT_MISSING",
+  };
+  raw
+    .prepare(
+      "INSERT INTO capture_job_deliveries(delivery_id,request_json,response_json) VALUES(?,?,?)",
+    )
+    .run(
+      delivery.delivery_id,
+      JSON.stringify(delivery),
+      JSON.stringify({ accepted: true }),
+    );
+  const before = snapshot();
+  expect((await result(delivery)).status).toBe(403);
+  env.CAPTURE_JOBS_GRANT_OPERATIONS = "plan";
+  expect((await result(delivery)).status).toBe(503);
+  expect(snapshot()).toBe(before);
+  env.CUT_PLANNING_ENABLED = "true";
+  expect((await result(delivery)).status).toBe(200);
 });
