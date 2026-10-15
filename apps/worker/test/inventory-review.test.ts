@@ -669,3 +669,51 @@ it("claim UUID is bound to its capture or cut capability even for an empty recei
     claimJob(db, { request_id, job_kind: "cut" }, now),
   ).rejects.toMatchObject({ code: "JOB_CONFLICT" });
 });
+
+it("duration filtering is strictly over 300 seconds before paginated numeric sorting", async () => {
+  const items = Array.from({ length: 25 }, (_, i) => {
+    const item = media(i + 1, `clips/${i}.mp4`);
+    item.media!.duration_seconds = 301 + i;
+    return item;
+  });
+  const boundary = media(100, "clips/boundary.mp4");
+  boundary.media!.duration_seconds = 300;
+  const unknown = media(101, "clips/unknown.mp4");
+  unknown.media!.duration_seconds = null;
+  await accept([...items, boundary, unknown]);
+  const first = await listInventory(db, episode, null, {
+    sort: "duration",
+    direction: "desc",
+    duration: "over_300",
+  });
+  expect(first.summary.matchedItems).toBe(25);
+  expect(first.items).toHaveLength(20);
+  expect(first.items[0].variants[0].item.media?.duration_seconds).toBe(325);
+  const next = await listInventory(db, episode, first.nextCursor, {
+    sort: "duration",
+    direction: "desc",
+    duration: "over_300",
+  });
+  expect(next.items).toHaveLength(5);
+  expect(next.items.at(-1)?.variants[0].item.media?.duration_seconds).toBe(301);
+  expect(new Set([...first.items, ...next.items].map((i) => i.id)).size).toBe(
+    25,
+  );
+  await expect(
+    listInventory(db, episode, first.nextCursor, {
+      sort: "duration",
+      direction: "desc",
+      duration: "all",
+    }),
+  ).rejects.toThrow();
+  const all = await listInventory(db, episode, null, {
+    sort: "duration",
+    direction: "asc",
+  });
+  expect(all.items[0].id).toBe(boundary.id);
+  const end = await listInventory(db, episode, all.nextCursor, {
+    sort: "duration",
+    direction: "asc",
+  });
+  expect(end.items.at(-1)?.id).toBe(unknown.id);
+});

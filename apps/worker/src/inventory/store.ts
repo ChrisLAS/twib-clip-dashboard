@@ -206,6 +206,7 @@ export async function inventoryEpisodeSelection(params: URLSearchParams) {
     "direction",
     "review",
     "groupFolders",
+    "duration",
   ])
     if (params.getAll(name).length > 1)
       throw new HttpError(
@@ -250,6 +251,7 @@ interface InventoryListOptions {
   direction?: string | null;
   review?: string | null;
   groupFolders?: boolean;
+  duration?: string | null;
 }
 
 // The index seeks the greatest durable sequence for each retained identity.
@@ -302,6 +304,7 @@ const reviewedLatestItemsSql = `SELECT n.*,
 // and deliberately searches reference metadata rather than prose or origins.
 const matchesFilterSql = `
   (filters.group_name='all' OR latest.item_group=filters.group_name)
+  AND (filters.duration_name='all' OR json_extract(latest.item_json,'$.media.duration_seconds')>300)
   AND (filters.review_name='all' OR latest.effective_review_status=filters.review_name)
   AND (filters.status IS NULL OR json_extract(latest.item_json,'$.processing_status')=filters.status)
   AND (filters.query='' OR instr(lower(latest.item_id),filters.query)>0
@@ -397,9 +400,11 @@ export async function listInventory(
     sort = options.sort ?? "identity",
     direction = options.direction ?? "asc",
     review = options.review ?? "all",
-    groupFolders = options.groupFolders === true;
+    groupFolders = options.groupFolders === true,
+    duration = options.duration ?? "all";
   if (
-    !["identity", "filename", "first_observed"].includes(sort) ||
+    !["identity", "filename", "first_observed", "duration"].includes(sort) ||
+    !["all", "over_300"].includes(duration) ||
     !["asc", "desc"].includes(direction) ||
     !["all", "unreviewed", "approved", "rejected", "cut_down"].includes(review)
   )
@@ -417,6 +422,7 @@ export async function listInventory(
     direction,
     review,
     groupFolders,
+    duration,
   ]);
   const legacy = after !== null && /^item_[a-f0-9]{64}$/.test(after);
   if (
@@ -424,7 +430,8 @@ export async function listInventory(
     (sort !== "identity" ||
       direction !== "asc" ||
       review !== "all" ||
-      groupFolders)
+      groupFolders ||
+      duration !== "all")
   )
     throw new HttpError(
       422,
@@ -445,8 +452,8 @@ export async function listInventory(
     .bind(INVENTORY_SOURCE, episode)
     .first<{ watermark: number }>();
   const watermark = cursor?.watermark ?? maximum?.watermark ?? 0;
-  const filters = [group, status, query.toLowerCase(), review];
-  const base = `WITH limits AS (SELECT ? watermark), latest AS (${reviewedLatestItemsSql}), filters AS (SELECT ? group_name,? status,? query,? review_name)`;
+  const filters = [group, status, query.toLowerCase(), review, duration];
+  const base = `WITH limits AS (SELECT ? watermark), latest AS (${reviewedLatestItemsSql}), filters AS (SELECT ? group_name,? status,? query,? review_name,? duration_name)`;
   const values = [
     watermark,
     INVENTORY_SOURCE,
@@ -489,7 +496,9 @@ export async function listInventory(
       ? "CASE WHEN media_ref='' THEN NULL ELSE lower(filename) END"
       : sort === "first_observed"
         ? "first_seen_ms"
-        : "item_id";
+        : sort === "duration"
+          ? "json_extract(item_json,'$.media.duration_seconds')"
+          : "item_id";
   const folderSql = groupFolders ? "folder" : "''";
   const comparison = direction === "asc" ? ">" : "<",
     order = direction === "asc" ? "ASC" : "DESC";
@@ -616,9 +625,11 @@ export async function listInventory(
       group: group as InventoryGroup,
       status: status as InventoryStatus | null,
       query,
+      duration: duration as "all" | "over_300",
       ...(options.sort !== undefined && options.sort !== null
         ? {
-            sort: sort as "identity" | "filename" | "first_observed",
+            sort: sort as
+              "identity" | "filename" | "first_observed" | "duration",
             direction: direction as "asc" | "desc",
             review: review as
               "all" | "unreviewed" | "approved" | "rejected" | "cut_down",
@@ -636,7 +647,8 @@ export async function listInventory(
         ? sort === "identity" &&
           direction === "asc" &&
           review === "all" &&
-          !groupFolders
+          !groupFolders &&
+          duration === "all"
           ? last.item_id
           : cursorEncode({
               v: 1,

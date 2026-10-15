@@ -60,7 +60,8 @@ export const api = {
       status: InventoryStatus | null;
       query: string;
       after: string | null;
-      sort?: "filename" | "first_observed";
+      sort?: "filename" | "first_observed" | "duration";
+      duration?: "all" | "over_300";
       direction?: "asc" | "desc";
       review?: "all" | "unreviewed" | "approved" | "rejected" | "cut_down";
       groupFolders?: boolean;
@@ -75,6 +76,7 @@ export const api = {
     if (input.query) params.set("q", input.query);
     if (input.after) params.set("after", input.after);
     if (input.sort) params.set("sort", input.sort);
+    if (input.duration) params.set("duration", input.duration);
     if (input.direction) params.set("direction", input.direction);
     if (input.review) params.set("review", input.review);
     if (input.groupFolders !== undefined)

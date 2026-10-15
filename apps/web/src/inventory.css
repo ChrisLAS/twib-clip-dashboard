@@ -927,3 +927,32 @@
   font-weight: 400;
   color: var(--muted, #9da6a5);
 }
+
+.inventory-batch-panel {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid var(--line, #555);
+  border-radius: 12px;
+}
+.inventory-batch-panel fieldset {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+}
+.inventory-batch-panel label {
+  display: block;
+  margin: 0.5rem 0;
+}
+.inventory-batch-panel textarea {
+  display: block;
+  width: 100%;
+  min-height: 4rem;
+}
+.inventory-batch-panel input:not([type="checkbox"]) {
+  margin-left: 0.5rem;
+}
+.inventory-batch-panel .inventory-batch-choice {
+  overflow-wrap: anywhere;
+}
+.inventory-batch-panel button {
+  margin: 0.5rem 0.5rem 0.5rem 0;
+}

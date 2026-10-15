@@ -174,7 +174,8 @@ export interface InventoryResponse {
   ingestionPaused: boolean;
   identityCaveat: string;
   filters: {
-    sort?: "identity" | "filename" | "first_observed";
+    sort?: "identity" | "filename" | "first_observed" | "duration";
+    duration?: "all" | "over_300";
     direction?: "asc" | "desc";
     review?: "all" | "unreviewed" | "approved" | "rejected" | "cut_down";
     group: InventoryGroup;

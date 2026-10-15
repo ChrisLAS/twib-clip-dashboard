@@ -1,3 +1,4 @@
+import { InventoryBatchPanel } from "./inventory-batch-panel";
 import {
   InventoryReviewEditor,
   reviewLabels,
@@ -339,7 +340,12 @@ export function InventoryPanel({
   const [reviewDrafts, setReviewDrafts] = useState<
     Record<string, InventoryReviewDraft>
   >({});
-  const [sort, setSort] = useState<"filename" | "first_observed">("filename");
+  const [sort, setSort] = useState<"filename" | "first_observed" | "duration">(
+    "filename",
+  );
+  const [durationFilter, setDurationFilter] = useState<"all" | "over_300">(
+    "all",
+  );
   const [direction, setDirection] = useState<"asc" | "desc">("asc");
   const [reviewFilter, setReviewFilter] = useState<
     "all" | InventoryReviewStatus
@@ -417,6 +423,7 @@ export function InventoryPanel({
           query,
           after: cursor,
           sort,
+          duration: durationFilter,
           direction,
           review: reviewFilter,
           groupFolders,
@@ -446,6 +453,7 @@ export function InventoryPanel({
     cursor,
     revision,
     sort,
+    durationFilter,
     direction,
     reviewFilter,
     groupFolders,
@@ -744,12 +752,15 @@ export function InventoryPanel({
               aria-label="Sort inventory"
               value={sort}
               onChange={(e) => {
-                setSort(e.target.value as "filename" | "first_observed");
+                setSort(
+                  e.target.value as "filename" | "first_observed" | "duration",
+                );
                 resetPage();
               }}
             >
               <option value="filename">Filename</option>
               <option value="first_observed">First observed</option>
+              <option value="duration">Duration</option>
             </select>
           </label>
           <label>
@@ -784,6 +795,20 @@ export function InventoryPanel({
                   {label}
                 </option>
               ))}
+            </select>
+          </label>
+          <label>
+            <span>Duration</span>
+            <select
+              aria-label="Duration filter"
+              value={durationFilter}
+              onChange={(e) => {
+                setDurationFilter(e.target.value as "all" | "over_300");
+                resetPage();
+              }}
+            >
+              <option value="all">All durations</option>
+              <option value="over_300">Longer than 5 minutes</option>
             </select>
           </label>
           <label className="inventory-folder-toggle">
@@ -832,6 +857,38 @@ export function InventoryPanel({
             <RefreshCw className="spin" size={20} />
             Reading stored inventory…
           </div>
+        )}
+        {data?.cutRequestsEnabled && (
+          <InventoryBatchPanel
+            key={data.sourceId + ":" + data.episodeId}
+            items={loading ? [] : data.items}
+            csrfToken={loading ? undefined : csrfToken}
+            blockedIds={data.items
+              .filter(
+                (item) =>
+                  !!reviewDrafts[
+                    inventoryScopeKey(data.sourceId, data.episodeId, item.id)
+                  ],
+              )
+              .map((item) => item.id)}
+            onSaved={(id, review) => {
+              setData((old) =>
+                old
+                  ? {
+                      ...old,
+                      items: old.items.map((item) =>
+                        item.id === id ? { ...item, review } : item,
+                      ),
+                    }
+                  : old,
+              );
+              setSelection((old) =>
+                old?.record.id === id
+                  ? { ...old, record: { ...old.record, review } }
+                  : old,
+              );
+            }}
+          />
         )}
         {data &&
           (shownItems.length ? (

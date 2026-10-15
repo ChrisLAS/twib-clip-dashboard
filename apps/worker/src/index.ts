@@ -233,6 +233,7 @@ export default {
             direction: url.searchParams.get("direction"),
             review: url.searchParams.get("review"),
             groupFolders: url.searchParams.get("groupFolders") === "true",
+            duration: url.searchParams.get("duration"),
             ingestionEnabled: env.INVENTORY_INGEST_ENABLED === "true",
           },
         );
