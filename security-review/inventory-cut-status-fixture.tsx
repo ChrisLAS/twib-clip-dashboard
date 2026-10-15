@@ -57,6 +57,18 @@ function Fixture() {
   const states: InventoryCutRequest[] = [
     {
       ...base,
+      requestId: base.requestId.slice(0, -2) + "10",
+      state: "queued",
+      spec: { kind: "editorial", guidance: "Preserve the qualification" },
+    },
+    {
+      ...base,
+      requestId: base.requestId.slice(0, -2) + "11",
+      state: "running",
+      spec: { kind: "editorial", guidance: "Preserve the qualification" },
+    },
+    {
+      ...base,
       requestId: base.requestId.slice(0, -1) + "8",
       state: "needs_review",
       proposal,

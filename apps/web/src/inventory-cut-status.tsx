@@ -15,11 +15,11 @@ export function cutStatusLabel(cut: InventoryCutRequest) {
       : "Blocked: action needed";
   if (cut.proposal) return "Cut plan prepared · Unreviewed";
   if (cut.state === "queued")
-    return cut.spec.kind === "first_pass"
+    return cut.spec.kind !== "range"
       ? "Queued for episode-context planning"
       : "Queued for cutdown render";
   if (cut.state === "running")
-    return cut.spec.kind === "first_pass"
+    return cut.spec.kind !== "range"
       ? "Planning cutdown"
       : "Rendering review version";
   if (cut.state === "succeeded")

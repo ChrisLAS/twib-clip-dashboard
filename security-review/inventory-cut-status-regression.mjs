@@ -51,12 +51,19 @@ try {
       "Cutdown failed",
       "Automatic cut blocked: source or review changed",
     ])
-      assert.equal(await page.getByText(text, { exact: true }).count(), 1);
+      assert.equal(
+        await page.getByText(text, { exact: true }).count(),
+        ["Queued for episode-context planning", "Planning cutdown"].includes(
+          text,
+        )
+          ? 2
+          : 1,
+      );
     assert.equal(
       await page
         .getByText("Original: originals/long-source.mp4", { exact: false })
         .count(),
-      8,
+      10,
     );
     assert.equal(
       await page
@@ -97,7 +104,7 @@ try {
       await page
         .getByText("Original: originals/long-source.mp4", { exact: false })
         .count(),
-      8,
+      10,
     );
     assert.equal(
       await page

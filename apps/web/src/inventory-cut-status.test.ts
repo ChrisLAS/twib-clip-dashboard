@@ -51,3 +51,19 @@ it("distinguishes first-pass planning from rendering and a real derivative", () 
     }),
   ).toBe("Review version available · Unreviewed");
 });
+
+it("labels all non-range editorial jobs as planning, never rendering", () => {
+  const editorial = {
+    ...base,
+    spec: {
+      kind: "editorial" as const,
+      guidance: "Preserve the qualification",
+    },
+  };
+  expect(cutStatusLabel({ ...editorial, state: "queued" })).toBe(
+    "Queued for episode-context planning",
+  );
+  expect(cutStatusLabel({ ...editorial, state: "running" })).toBe(
+    "Planning cutdown",
+  );
+});
