@@ -1,3 +1,4 @@
+import { advanceIntakeWork, intakeWorkEnabled } from "./intake-work";
 import { planningEnabled } from "./cut";
 import { transitionAfterReceipt } from "./plan";
 import { requireKind } from "./scope";
@@ -66,7 +67,12 @@ export async function machineJobs(request: Request, env: Env) {
   if (isClaim) {
     const claim = claimSchema.parse(input);
     requireKind(env, claim.job_kind ?? "capture");
-    return json(await claimJob(env.DB, claim));
+    return json(
+      await claimJob(env.DB, claim, Date.now(), {
+        episode: Number(env.CAPTURE_JOBS_GRANT_EPISODE),
+        intakeEnabled: intakeWorkEnabled(env),
+      }),
+    );
   }
   const result = resultSchema.parse(input);
   // Resolve immutable server-side identity before any receipt replay or mutation.
@@ -81,6 +87,25 @@ export async function machineJobs(request: Request, env: Env) {
       "JOB_CONFLICT",
       "Reconcile the existing job before retrying.",
     );
+  if (
+    JSON.parse(job.request_json).episode !==
+    Number(env.CAPTURE_JOBS_GRANT_EPISODE)
+  )
+    throw new HttpError(
+      403,
+      "JOB_EPISODE_SCOPE_DENIED",
+      "Job episode is outside the exact grant.",
+    );
+  if (
+    result.state === "running" &&
+    JSON.parse(job.request_json).intake_work_id &&
+    !intakeWorkEnabled(env)
+  )
+    throw new HttpError(
+      403,
+      "INTAKE_WORK_DISABLED",
+      "Intake processing is disabled; do not start work.",
+    );
   requireKind(
     env,
     JSON.parse(job.request_json).kind === "plan"
@@ -90,6 +115,7 @@ export async function machineJobs(request: Request, env: Env) {
         : "capture",
   );
   const ack = await acceptResult(env.DB, result);
+  if (result.capture) await advanceIntakeWork(env, result.job_id);
   if (
     JSON.parse(job.request_json).kind === "plan" &&
     result.code === "EDITORIAL_PROPOSAL_READY"

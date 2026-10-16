@@ -1,3 +1,4 @@
+import { advanceIntakeWork } from "../capture-jobs/intake-work";
 import type { Env } from "../env";
 import { HttpError, json } from "../errors";
 import {
@@ -45,5 +46,6 @@ export async function ingestInventory(
     request.headers.get("Idempotency-Key"),
     grant,
   );
+  await advanceIntakeWork(env);
   return json(receipt, 200);
 }

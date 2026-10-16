@@ -1,3 +1,4 @@
+import { IntakeWorkPanel } from "./intake-work-panel";
 import { useEffect, useRef, useState } from "react";
 import {
   Check,
@@ -49,6 +50,7 @@ function fieldsFor(item: ManualIntake): Fields {
 }
 
 export function ManualIntakePanel({
+  owner,
   episodes,
   episodeId,
   items,
@@ -60,6 +62,7 @@ export function ManualIntakePanel({
   onSaved,
   onOpenRender,
 }: {
+  owner: string;
   episodes: Episode[];
   episodeId: string | null;
   items: ManualIntake[];
@@ -198,7 +201,7 @@ export function ManualIntakePanel({
       setSavedNotice(
         result.intake.status === "cancelled"
           ? "Intake cancelled. Source files are unchanged."
-          : `Saved · awaiting processing${result.intake.episodeId ? ` for Episode ${episodes.find((episode) => episode.id === result.intake.episodeId)?.number ?? "workspace"}` : " · Unassigned"}. No processor is connected yet.`,
+          : `Saved · awaiting processing${result.intake.episodeId ? ` for Episode ${episodes.find((episode) => episode.id === result.intake.episodeId)?.number ?? "workspace"}` : " · Unassigned"}. Work requires a separate saved request.`,
       );
     } catch (error) {
       if (!(error instanceof UncertainIntakeError)) {
@@ -423,7 +426,7 @@ export function ManualIntakePanel({
       <p className="intake-honesty">
         {demo
           ? "Manual intake is unavailable in the fictional demo."
-          : "No processor is connected yet. Saved submissions await processing; they are not playable clips or ready for review."}
+          : "Saved submissions are not playable clips or ready for review. Save a separate work request below to request processing."}
       </p>
       {savedNotice && (
         <p className="intake-feedback" role="status">
@@ -455,6 +458,17 @@ export function ManualIntakePanel({
           {cancelled.map(row)}
         </details>
       )}
+      <IntakeWorkPanel
+        owner={owner}
+        items={items.filter(
+          (item) => item.episodeId === episodeId || item.episodeId === null,
+        )}
+        csrf={csrf}
+        demo={demo}
+        hidden={hidden}
+        disabled={disabled || saving || open || !!attempt}
+        onBusy={onBusy}
+      />
       {open && (
         <div className="intake-backdrop">
           <section

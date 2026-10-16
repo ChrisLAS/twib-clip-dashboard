@@ -1,0 +1,231 @@
+{
+  "capture_request": {
+    "job_id": "2e279582-400c-4a46-8d77-824e4bb25fc5",
+    "show": "twib",
+    "episode": 128,
+    "url": "https://www.youtube.com/watch?v=abcdefghijk",
+    "reported_by": "chad",
+    "intake_work_id": "ac274f53-137a-4ca9-8041-c7c1c0dbb3b9"
+  },
+  "capture": {
+    "version": 1,
+    "job_id": "2e279582-400c-4a46-8d77-824e4bb25fc5",
+    "ref": "new-review/2e279582-400c-4a46-8d77-824e4bb25fc5-a1.mp4",
+    "sha256": "53e7bafa20dd5d46e7dfc8b0f210328b9a038cf75ff5cfd787d97216bd2077e4",
+    "size_bytes": 52116,
+    "duration_seconds": 3.0,
+    "show": "twib",
+    "episode": 128,
+    "editorial_ready": false
+  },
+  "cut_request": {
+    "job_id": "7080adda-d926-4895-9816-d63122445474",
+    "kind": "cut",
+    "show": "twib",
+    "episode": 128,
+    "reported_by": "chad",
+    "intake_work_id": "ac274f53-137a-4ca9-8041-c7c1c0dbb3b9",
+    "parent": {
+      "item_id": "item_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clip_id": "capture-2e279582-400c-4a46-8d77-824e4bb25fc5-a1",
+      "clip_uid": null,
+      "ref": "new-review/2e279582-400c-4a46-8d77-824e4bb25fc5-a1.mp4",
+      "sha256": "53e7bafa20dd5d46e7dfc8b0f210328b9a038cf75ff5cfd787d97216bd2077e4",
+      "size_bytes": 52116,
+      "modified_at": null
+    },
+    "spec": {
+      "kind": "range",
+      "startSeconds": 0.5,
+      "endSeconds": 2.5
+    }
+  },
+  "cut_result": {
+    "approval": "unreviewed",
+    "clip_id": "7080adda-d926-4895-9816-d63122445474-a1",
+    "duration_seconds": 2.0,
+    "local_in_seconds": 0.5,
+    "local_out_seconds": 2.5,
+    "parent_clip_id": "capture-2e279582-400c-4a46-8d77-824e4bb25fc5-a1",
+    "ready": false,
+    "ref": "new-review/7080adda-d926-4895-9816-d63122445474-a1.mp4",
+    "sha256": "ff5e0762da2211189c743b37ad224bad82f35f1958c8e69cc1477c678156c7b6",
+    "size_bytes": 36135,
+    "source_long_clip_id": "capture-2e279582-400c-4a46-8d77-824e4bb25fc5-a1",
+    "source_sha256": "53e7bafa20dd5d46e7dfc8b0f210328b9a038cf75ff5cfd787d97216bd2077e4"
+  },
+  "plan_request": {
+    "job_id": "c326869b-ff58-4236-a4c9-f39e32f0ba01",
+    "kind": "plan",
+    "show": "twib",
+    "episode": 128,
+    "reported_by": "chad",
+    "intake_work_id": "ac274f53-137a-4ca9-8041-c7c1c0dbb3b9",
+    "parent": {
+      "item_id": "item_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clip_id": "capture-2e279582-400c-4a46-8d77-824e4bb25fc5-a1",
+      "clip_uid": null,
+      "ref": "new-review/2e279582-400c-4a46-8d77-824e4bb25fc5-a1.mp4",
+      "sha256": "53e7bafa20dd5d46e7dfc8b0f210328b9a038cf75ff5cfd787d97216bd2077e4",
+      "size_bytes": 52116,
+      "modified_at": null
+    },
+    "spec": {
+      "kind": "first_pass"
+    },
+    "planning": {
+      "parentVersion": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "reviewRevision": 0,
+      "requestRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  },
+  "proposal": {
+    "approval": "unreviewed",
+    "binding": "c08e7b46eff487466ec96075a0f2e93fb466792d98009b8e9a722395e1aef5b7",
+    "contextRevision": "51d69074b729e9420fb4e55f699d403b5d2f92904a921764bdb8c96f886f3727",
+    "range": {
+      "endSeconds": 2.5,
+      "kind": "range",
+      "startSeconds": 0.5
+    },
+    "rationale": "Complete fixture thought matches the locked thesis.",
+    "ready": false,
+    "requestRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "sourceSha256": "53e7bafa20dd5d46e7dfc8b0f210328b9a038cf75ff5cfd787d97216bd2077e4",
+    "transcriptRevision": "06f9410bc5589f77e301ccd97aa305eeb557f1600178e67967a515ed6766440e"
+  },
+  "capture_claim": {
+    "job_id": "2e279582-400c-4a46-8d77-824e4bb25fc5",
+    "show": "twib",
+    "episode": 128,
+    "url": "https://www.youtube.com/watch?v=abcdefghijk",
+    "reported_by": "chad",
+    "intake_work_id": "ac274f53-137a-4ca9-8041-c7c1c0dbb3b9",
+    "operation": "capture",
+    "retry_id": null,
+    "lease_id": "b3c043a8-000f-4701-ba0a-21fc1e868c06",
+    "lease_expires_at": "2099-01-01T00:00:00Z",
+    "executor": "nomad:capture-worker"
+  },
+  "capture_delivery": {
+    "delivery_id": "e36f99ef-d156-41a0-b077-f3e67ee919fd",
+    "job_id": "2e279582-400c-4a46-8d77-824e4bb25fc5",
+    "lease_id": "b3c043a8-000f-4701-ba0a-21fc1e868c06",
+    "state": "succeeded",
+    "attempt": 1,
+    "code": null,
+    "capture": {
+      "version": 1,
+      "job_id": "2e279582-400c-4a46-8d77-824e4bb25fc5",
+      "ref": "new-review/2e279582-400c-4a46-8d77-824e4bb25fc5-a1.mp4",
+      "sha256": "53e7bafa20dd5d46e7dfc8b0f210328b9a038cf75ff5cfd787d97216bd2077e4",
+      "size_bytes": 52116,
+      "duration_seconds": 3.0,
+      "show": "twib",
+      "episode": 128,
+      "editorial_ready": false
+    }
+  },
+  "plan_claim": {
+    "job_id": "c326869b-ff58-4236-a4c9-f39e32f0ba01",
+    "kind": "plan",
+    "show": "twib",
+    "episode": 128,
+    "reported_by": "chad",
+    "intake_work_id": "ac274f53-137a-4ca9-8041-c7c1c0dbb3b9",
+    "parent": {
+      "item_id": "item_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clip_id": "capture-2e279582-400c-4a46-8d77-824e4bb25fc5-a1",
+      "clip_uid": null,
+      "ref": "new-review/2e279582-400c-4a46-8d77-824e4bb25fc5-a1.mp4",
+      "sha256": "53e7bafa20dd5d46e7dfc8b0f210328b9a038cf75ff5cfd787d97216bd2077e4",
+      "size_bytes": 52116,
+      "modified_at": null
+    },
+    "spec": {
+      "kind": "first_pass"
+    },
+    "planning": {
+      "parentVersion": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "reviewRevision": 0,
+      "requestRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "operation": "capture",
+    "retry_id": null,
+    "lease_id": "5caf350a-2fca-49f5-ba59-611d9e7fc914",
+    "lease_expires_at": "2099-01-01T00:00:00Z",
+    "executor": "nomad:capture-worker"
+  },
+  "plan_delivery": {
+    "delivery_id": "e24623af-098d-4a9a-b1de-ddc8b4e9a1a2",
+    "job_id": "c326869b-ff58-4236-a4c9-f39e32f0ba01",
+    "lease_id": "5caf350a-2fca-49f5-ba59-611d9e7fc914",
+    "state": "needs_review",
+    "attempt": 1,
+    "code": "EDITORIAL_PROPOSAL_READY",
+    "proposal": {
+      "approval": "unreviewed",
+      "binding": "c08e7b46eff487466ec96075a0f2e93fb466792d98009b8e9a722395e1aef5b7",
+      "contextRevision": "51d69074b729e9420fb4e55f699d403b5d2f92904a921764bdb8c96f886f3727",
+      "range": {
+        "endSeconds": 2.5,
+        "kind": "range",
+        "startSeconds": 0.5
+      },
+      "rationale": "Complete fixture thought matches the locked thesis.",
+      "ready": false,
+      "requestRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "sourceSha256": "53e7bafa20dd5d46e7dfc8b0f210328b9a038cf75ff5cfd787d97216bd2077e4",
+      "transcriptRevision": "06f9410bc5589f77e301ccd97aa305eeb557f1600178e67967a515ed6766440e"
+    }
+  },
+  "cut_claim": {
+    "job_id": "7080adda-d926-4895-9816-d63122445474",
+    "kind": "cut",
+    "show": "twib",
+    "episode": 128,
+    "reported_by": "chad",
+    "intake_work_id": "ac274f53-137a-4ca9-8041-c7c1c0dbb3b9",
+    "parent": {
+      "item_id": "item_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "clip_id": "capture-2e279582-400c-4a46-8d77-824e4bb25fc5-a1",
+      "clip_uid": null,
+      "ref": "new-review/2e279582-400c-4a46-8d77-824e4bb25fc5-a1.mp4",
+      "sha256": "53e7bafa20dd5d46e7dfc8b0f210328b9a038cf75ff5cfd787d97216bd2077e4",
+      "size_bytes": 52116,
+      "modified_at": null
+    },
+    "spec": {
+      "kind": "range",
+      "startSeconds": 0.5,
+      "endSeconds": 2.5
+    },
+    "operation": "capture",
+    "retry_id": null,
+    "lease_id": "b9518865-31a2-4366-a372-072ecd9948b1",
+    "lease_expires_at": "2099-01-01T00:00:00Z",
+    "executor": "nomad:capture-worker"
+  },
+  "cut_delivery": {
+    "delivery_id": "7eef0415-37e5-4ad9-af72-11e86277d73b",
+    "job_id": "7080adda-d926-4895-9816-d63122445474",
+    "lease_id": "b9518865-31a2-4366-a372-072ecd9948b1",
+    "state": "needs_review",
+    "attempt": 1,
+    "code": "CUT_READY_FOR_REVIEW",
+    "result": {
+      "approval": "unreviewed",
+      "clip_id": "7080adda-d926-4895-9816-d63122445474-a1",
+      "duration_seconds": 2.0,
+      "local_in_seconds": 0.5,
+      "local_out_seconds": 2.5,
+      "parent_clip_id": "capture-2e279582-400c-4a46-8d77-824e4bb25fc5-a1",
+      "ready": false,
+      "ref": "new-review/7080adda-d926-4895-9816-d63122445474-a1.mp4",
+      "sha256": "ff5e0762da2211189c743b37ad224bad82f35f1958c8e69cc1477c678156c7b6",
+      "size_bytes": 36135,
+      "source_long_clip_id": "capture-2e279582-400c-4a46-8d77-824e4bb25fc5-a1",
+      "source_sha256": "53e7bafa20dd5d46e7dfc8b0f210328b9a038cf75ff5cfd787d97216bd2077e4"
+    }
+  }
+}

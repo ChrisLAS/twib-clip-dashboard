@@ -53,7 +53,7 @@ const scopeDenied = () =>
   new HttpError(
     403,
     "CAPTURE_JOBS_SCOPE_DENIED",
-    "A current Twib episode-127 capture-job grant is required.",
+    "A current exact-episode TWiB capture-job grant is required.",
   );
 
 // Identity may be explicitly reused, but authority never is: a separate signed
@@ -100,7 +100,7 @@ export async function authenticateCaptureJobs(
         !/^[a-f0-9]{64}$/.test(env.INVENTORY_ACCESS_AUD ?? ""))) ||
     env.CAPTURE_JOBS_GRANT_SOURCE_ID !== "nomad:capture-worker" ||
     env.CAPTURE_JOBS_GRANT_SHOW !== "twib" ||
-    env.CAPTURE_JOBS_GRANT_EPISODE !== "127" ||
+    !/^[1-9][0-9]{0,5}$/.test(env.CAPTURE_JOBS_GRANT_EPISODE ?? "") ||
     scopes.length < 1 ||
     scopes.length > 2 ||
     new Set(scopes).size !== scopes.length ||

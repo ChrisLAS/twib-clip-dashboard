@@ -1004,6 +1004,7 @@ function App() {
                       </div>
                     </section>
                     <ManualIntakePanel
+                      owner={session?.owner ?? ""}
                       episodes={episodes}
                       episodeId={episode.id}
                       items={intakes}

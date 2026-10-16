@@ -1044,6 +1044,7 @@ it.each([null, "", "bad id", "slash/id", "é", "x".repeat(129)])(
       };
       const p = preparedCut(
         {
+          episodeNumber: 127,
           operationId: crypto.randomUUID(),
           expectedVersion: await inventoryVersion(item),
           expectedRevision: 0,

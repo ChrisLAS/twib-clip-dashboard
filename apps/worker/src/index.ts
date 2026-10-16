@@ -1,3 +1,8 @@
+import {
+  listIntakeWork,
+  requestIntakeWork,
+  retryIntakeWork,
+} from "./capture-jobs/intake-work";
 import { proposalRange } from "./capture-jobs/plan";
 import { requireKind } from "./capture-jobs/scope";
 import {
@@ -413,7 +418,50 @@ export default {
         result = json(await listEpisodes(env.DB, owner));
       else if (/^\/api\/episodes\/[\w-]+$/.test(path) && method === "GET")
         result = json(await getEpisode(env.DB, path.split("/")[3], owner));
-      else if (path === "/api/intake" && method === "GET") {
+      else if (path === "/api/intake/work" && method === "GET")
+        result = json(
+          demo
+            ? { enabled: false, dispatchEnabled: false, jobs: [] }
+            : await listIntakeWork(env, owner),
+        );
+      else if (
+        /^\/api\/intake\/[\w-]+\/work$/.test(path) &&
+        method === "POST"
+      ) {
+        if (demo)
+          throw new HttpError(
+            403,
+            "OWNER_REQUIRED",
+            "An owner session is required.",
+          );
+        result = json(
+          await requestIntakeWork(
+            env,
+            path.split("/")[3],
+            await body(request),
+            owner,
+          ),
+        );
+      } else if (
+        /^\/api\/intake\/[\w-]+\/work\/[0-9a-f-]{36}\/retry$/.test(path) &&
+        method === "POST"
+      ) {
+        if (demo)
+          throw new HttpError(
+            403,
+            "OWNER_REQUIRED",
+            "An owner session is required.",
+          );
+        result = json(
+          await retryIntakeWork(
+            env,
+            path.split("/")[3],
+            path.split("/")[5],
+            await body(request),
+            owner,
+          ),
+        );
+      } else if (path === "/api/intake" && method === "GET") {
         const episodeId = url.searchParams.get("episodeId");
         if (
           episodeId !== null &&

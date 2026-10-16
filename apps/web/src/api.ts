@@ -1,4 +1,10 @@
 import type {
+  IntakeWorkList,
+  IntakeWorkView,
+  IntakeWorkInput,
+  IntakeWorkRetryInput,
+} from "@twib/shared";
+import type {
   InventoryResponse,
   InventoryStatus,
   InventoryGroup,
@@ -53,6 +59,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json();
 }
 export const api = {
+  intakeWork: (signal?: AbortSignal) =>
+    request<IntakeWorkList>("/api/intake/work", readOptions(signal)),
+  saveIntakeWork: (id: string, body: IntakeWorkInput, csrf: string) =>
+    request<IntakeWorkView>(`/api/intake/${encodeURIComponent(id)}/work`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+      body: JSON.stringify(body),
+    }),
+  retryIntakeWork: (
+    id: string,
+    jobId: string,
+    body: IntakeWorkRetryInput,
+    csrf: string,
+  ) =>
+    request<IntakeWorkView>(
+      `/api/intake/${encodeURIComponent(id)}/work/${encodeURIComponent(jobId)}/retry`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+        body: JSON.stringify(body),
+      },
+    ),
   inventory: (
     input: {
       episodeNumber: number;

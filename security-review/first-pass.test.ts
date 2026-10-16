@@ -25,6 +25,7 @@ describe("first-pass requests", () => {
     ]) {
       const p = preparedCut(
         {
+          episodeNumber: 127,
           operationId: "12345678-1234-4234-8234-123456789abc",
           expectedVersion: "v1",
           expectedRevision: 1,

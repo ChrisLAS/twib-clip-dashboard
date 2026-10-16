@@ -75,7 +75,7 @@ it("immutable creation rejects changed source/identity, no arbitrary paths", asy
   ).rejects.toMatchObject({ code: "JOB_CONFLICT" });
   for (const bad of [
     { ...input, path: "/tmp/a" },
-    { ...input, episode: 128 },
+    { ...input, episode: 0 },
     { ...input, url: "http://127.0.0.1/a" },
     { ...input, url: "https://youtube.com.evil/watch?v=abcdefghijk" },
   ])

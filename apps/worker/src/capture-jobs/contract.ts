@@ -34,8 +34,9 @@ export const publicCaptureUrl = z
 export const createJobSchema = z
   .object({
     job_id: uuid,
+    intake_work_id: uuid.optional(),
     show: z.literal("twib"),
-    episode: z.literal(127),
+    episode: z.number().int().min(1).max(999999),
     url: publicCaptureUrl,
     reported_by: z.enum(["chad", "number-one"]),
   })
@@ -47,6 +48,19 @@ export const claimSchema = z
   })
   .strict();
 export const retrySchema = z.object({ retry_id: uuid }).strict();
+export const captureReceiptSchema = z
+  .object({
+    version: z.literal(1),
+    job_id: uuid,
+    ref: z.string().regex(/^new-review\/[A-Za-z0-9][A-Za-z0-9._-]{0,240}$/),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    size_bytes: z.number().int().min(1).max(536870912),
+    duration_seconds: z.number().finite().positive().max(86400),
+    show: z.literal("twib"),
+    episode: z.number().int().min(1).max(999999),
+    editorial_ready: z.literal(false),
+  })
+  .strict();
 export const resultSchema = z
   .object({
     delivery_id: uuid,
@@ -61,6 +75,7 @@ export const resultSchema = z
     ]),
     attempt: z.number().int().min(0).max(100),
     result: derivativeSchema.optional(),
+    capture: captureReceiptSchema.optional(),
     proposal: proposalSchema.optional(),
     code: z
       .string()
@@ -71,8 +86,9 @@ export const resultSchema = z
 export type CaptureClaim = {
   kind?: undefined;
   job_id: string;
+  intake_work_id?: string;
   show: "twib";
-  episode: 127;
+  episode: number;
   url: string;
   reported_by: "chad" | "number-one";
   operation: "capture" | "retry";

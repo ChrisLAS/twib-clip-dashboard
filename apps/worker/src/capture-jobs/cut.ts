@@ -45,6 +45,7 @@ export function preparedCut(
     operationId: string;
     expectedVersion: string;
     expectedRevision: number;
+    episodeNumber: number;
     cutSpec?: unknown;
   },
   item: InventoryItem,
@@ -80,7 +81,7 @@ export function preparedCut(
     job_id: input.operationId,
     kind: "cut",
     show: "twib",
-    episode: 127,
+    episode: input.episodeNumber,
     reported_by: "chad",
     parent: {
       item_id: item.id,
@@ -187,8 +188,18 @@ export async function readCut(db: D1Database, id: string) {
     .bind(id)
     .first<Row>();
 }
+export function authorizationTable(row: {
+  review_revision: number;
+  request_id: string;
+}) {
+  if (row.review_revision !== 0) return "inventory_reviews";
+  if (!/^[a-f0-9-]{36}$/.test(row.request_id)) throw denied();
+  return `(SELECT * FROM intake_cut_authorizations WHERE request_id='${row.request_id}')`;
+}
 export async function eligibility(db: D1Database, row: Row) {
-  const episode = await inventoryEpisodeId(127);
+  const episode = await inventoryEpisodeId(
+    cutWireSchema.parse(JSON.parse(row.request_json)).episode,
+  );
   const obs = await db
     .prepare(
       "SELECT receipt_id,sequence,item_json FROM inventory_observations WHERE source_id=? AND episode_id=? AND item_id=? ORDER BY sequence DESC LIMIT 1",
@@ -197,7 +208,19 @@ export async function eligibility(db: D1Database, row: Row) {
     .first<{ receipt_id: string; sequence: number; item_json: string }>();
   if (!obs) throw denied();
   const item = JSON.parse(obs.item_json) as InventoryItem;
-  const review = await reviewFor(db, episode, item);
+  const review =
+    row.review_revision === 0
+      ? await db
+          .prepare(
+            "SELECT revision,status,reviewed_version FROM intake_cut_authorizations WHERE request_id=?",
+          )
+          .bind(row.request_id)
+          .first<{
+            revision: number;
+            status: string;
+            reviewed_version: string;
+          }>()
+      : await reviewFor(db, episode, item);
   if (
     (await inventoryVersion(item)) !== row.parent_version ||
     review?.revision !== row.review_revision ||
@@ -254,7 +277,7 @@ export async function enqueueCut(
   await db.batch([
     db
       .prepare(
-        `INSERT OR IGNORE INTO capture_jobs(job_id,request_json,owner,state,operation,created_at,updated_at) SELECT ?,?,?,'queued','capture',?,? WHERE EXISTS(SELECT 1 FROM inventory_observations o WHERE o.source_id=? AND o.episode_id=? AND o.item_id=? AND o.receipt_id=? AND o.sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence)) AND EXISTS(SELECT 1 FROM inventory_reviews WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?) AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`,
+        `INSERT OR IGNORE INTO capture_jobs(job_id,request_json,owner,state,operation,created_at,updated_at) SELECT ?,?,?,'queued','capture',?,? WHERE EXISTS(SELECT 1 FROM inventory_observations o WHERE o.source_id=? AND o.episode_id=? AND o.item_id=? AND o.receipt_id=? AND o.sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence)) AND EXISTS(SELECT 1 FROM ${authorizationTable(row)} WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?) AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`,
       )
       .bind(
         id,
@@ -293,20 +316,25 @@ export async function retryCut(
   value: unknown,
   owner: string,
   now = Date.now(),
+  options: { planning?: boolean; expectedAttempt?: number } = {},
 ) {
   const row = await readCut(db, id);
-  if (!row || row.owner !== owner || row.derivative_json) throw denied();
+  if (!row || row.owner !== owner || row.derivative_json || row.proposal_json)
+    throw denied();
   const wire = cutWireSchema.parse(JSON.parse(row.request_json));
   if (
-    wire.spec.kind !== "range" ||
+    (wire.spec.kind !== "range") !== !!options.planning ||
     !wire.parent.sha256 ||
     !executableCutParentSchema.safeParse(wire.parent).success
   )
     throw denied();
   const { episode, obs, duplicateId } = await eligibility(db, row);
   await retryJob(db, id, value, now, {
-    sql: `NOT EXISTS(SELECT 1 FROM inventory_cut_requests c WHERE c.request_id=? AND c.derivative_json IS NOT NULL) AND EXISTS(SELECT 1 FROM inventory_observations o WHERE o.source_id=? AND o.episode_id=? AND o.item_id=? AND o.receipt_id=? AND o.sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence)) AND EXISTS(SELECT 1 FROM inventory_reviews WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?) AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`,
+    sql: `${options.expectedAttempt === undefined ? "" : "EXISTS(SELECT 1 FROM capture_jobs WHERE job_id=? AND attempt=?) AND "}NOT EXISTS(SELECT 1 FROM inventory_cut_requests c WHERE c.request_id=? AND c.derivative_json IS NOT NULL) AND EXISTS(SELECT 1 FROM inventory_observations o WHERE o.source_id=? AND o.episode_id=? AND o.item_id=? AND o.receipt_id=? AND o.sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence)) AND EXISTS(SELECT 1 FROM ${authorizationTable(row)} WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?) AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`,
     bindings: [
+      ...(options.expectedAttempt === undefined
+        ? []
+        : [id, options.expectedAttempt]),
       id,
       INVENTORY_SOURCE,
       episode,

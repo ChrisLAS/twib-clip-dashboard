@@ -83,9 +83,10 @@ export const cutWireSchema = z
       .string()
       .uuid()
       .regex(/^[0-9a-f-]+$/),
+    intake_work_id: z.string().uuid().optional(),
     kind: z.literal("cut"),
     show: z.literal("twib"),
-    episode: z.literal(127),
+    episode: z.number().int().min(1).max(999999),
     reported_by: z.literal("chad"),
     parent: cutParentSchema,
     spec: cutSpecSchema,
@@ -131,13 +132,17 @@ export const planWireSchema = cutWireSchema
     planning: z
       .object({
         parentVersion: digest,
-        reviewRevision: z.number().int().positive(),
+        reviewRevision: z.number().int().nonnegative(),
         requestRevision: digest,
       })
       .strict(),
   })
   .refine(
-    (v) => v.spec.kind !== "range" && v.parent.sha256 !== null && !v.editorial,
+    (v) =>
+      v.spec.kind !== "range" &&
+      v.parent.sha256 !== null &&
+      !v.editorial &&
+      (v.planning.reviewRevision > 0 || !!v.intake_work_id),
     "Planning requires source proof and a non-range request",
   );
 export const proposalSchema = z

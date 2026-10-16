@@ -1,9 +1,11 @@
+import { intakeClaimGuard } from "./intake-work-guard";
 import { acceptPlanResult } from "./plan";
 import { cutWireSchema, derivativeSchema } from "./cut-contract";
 import { HttpError } from "../errors";
 import {
   createJobSchema,
   claimSchema,
+  captureReceiptSchema,
   resultSchema,
   retrySchema,
   type ClaimResponse,
@@ -131,13 +133,35 @@ export async function claimJob(
   db: D1Database,
   value: unknown,
   now = Date.now(),
+  scope?: { episode: number; intakeEnabled: boolean },
 ): Promise<ClaimResponse> {
   const { request_id, job_kind = "capture" } = claimSchema.parse(value);
-  const responseFor = (encoded: string): ClaimResponse => {
+  if (
+    scope &&
+    (!Number.isSafeInteger(scope.episode) ||
+      scope.episode < 1 ||
+      scope.episode > 999999)
+  )
+    throw conflict();
+  const responseFor = async (encoded: string): Promise<ClaimResponse> => {
     const stored = JSON.parse(encoded) as ClaimResponse & {
       _job_kind?: string;
     };
     if ((stored._job_kind ?? "capture") !== job_kind) throw conflict();
+    if (stored.claim && scope) {
+      if (stored.claim.episode !== scope.episode) throw conflict();
+      if (
+        stored.claim.intake_work_id &&
+        (!scope.intakeEnabled ||
+          !(await db
+            .prepare(
+              `SELECT 1 FROM capture_jobs WHERE job_id=? AND ${intakeClaimGuard(true)}`,
+            )
+            .bind(stored.claim.job_id)
+            .first()))
+      )
+        throw conflict();
+    }
     const { _job_kind: ignored, ...response } = stored;
     void ignored;
     return response;
@@ -159,16 +183,22 @@ export async function claimJob(
     if (replay) return responseFor(replay.response_json);
     throw error;
   }
+  const scopeSql = scope
+    ? ` AND json_extract(request_json,'$.episode')=${scope.episode} AND ${intakeClaimGuard(scope.intakeEnabled)}`
+    : " AND json_extract(request_json,'$.intake_work_id') IS NULL";
+  const prioritySql = scope?.intakeEnabled
+    ? "coalesce((SELECT CASE priority WHEN 'urgent' THEN 1 ELSE 0 END FROM intake_work_requests w WHERE w.job_id=json_extract(capture_jobs.request_json,'$.intake_work_id')),0) DESC,"
+    : "";
   // Claim UUID is also the lease UUID: replay lookup remains stable after response loss.
   await db.batch([
     db
       .prepare(
-        "UPDATE capture_jobs SET state='needs_review',code='LEASE_EXPIRED',updated_at=? WHERE lease_expires_at<=? AND state IN ('running','waiting_for_episode','blocked') AND coalesce(json_extract(request_json,'$.kind'),'capture')=?",
+        `UPDATE capture_jobs SET state='needs_review',code='LEASE_EXPIRED',updated_at=? WHERE lease_expires_at<=? AND state IN ('running','waiting_for_episode','blocked') AND coalesce(json_extract(request_json,'$.kind'),'capture')=? ${scope ? `AND json_extract(request_json,'$.episode')=${scope.episode}` : ""}`,
       )
       .bind(now, now, job_kind),
     db
       .prepare(
-        "UPDATE capture_jobs SET state='running',lease_id=?,lease_expires_at=?,updated_at=? WHERE job_id=(SELECT job_id FROM capture_jobs WHERE state='queued' AND coalesce(json_extract(request_json,'$.kind'),'capture')=? ORDER BY created_at,job_id LIMIT 1) AND state='queued' AND NOT EXISTS(SELECT 1 FROM capture_job_claims WHERE request_id=?) AND NOT EXISTS(SELECT 1 FROM capture_jobs WHERE lease_id=?)",
+        `UPDATE capture_jobs SET state='running',lease_id=?,lease_expires_at=?,updated_at=? WHERE job_id=(SELECT job_id FROM capture_jobs WHERE state='queued' AND coalesce(json_extract(request_json,'$.kind'),'capture')=? ${scopeSql} ORDER BY ${prioritySql} created_at,job_id LIMIT 1) AND state='queued' AND NOT EXISTS(SELECT 1 FROM capture_job_claims WHERE request_id=?) AND NOT EXISTS(SELECT 1 FROM capture_jobs WHERE lease_id=?)`,
       )
       .bind(request_id, now + 7200000, now, job_kind, request_id, request_id),
     db
@@ -201,9 +231,36 @@ export async function acceptResult(
   const input = resultSchema.parse(value),
     wire = JSON.stringify(input);
   const identity = await read(db, input.job_id);
+  const runningIntake =
+    input.state === "running" &&
+    !!(identity && JSON.parse(identity.request_json).intake_work_id);
+  if (
+    runningIntake &&
+    !(await db
+      .prepare(
+        `SELECT 1 FROM capture_jobs WHERE job_id=? AND ${intakeClaimGuard(true)}`,
+      )
+      .bind(input.job_id)
+      .first())
+  )
+    throw conflict();
   if (identity && JSON.parse(identity.request_json).kind === "plan")
     return acceptPlanResult(db, input, now);
   if (input.proposal) throw conflict();
+  if (input.capture) {
+    const proof = captureReceiptSchema.parse(input.capture);
+    const request = identity && JSON.parse(identity.request_json);
+    if (
+      !request ||
+      request.kind ||
+      input.state !== "succeeded" ||
+      proof.job_id !== input.job_id ||
+      proof.episode !== request.episode ||
+      proof.show !== request.show ||
+      input.result
+    )
+      throw conflict();
+  }
   const old = await db
     .prepare(
       "SELECT request_json,response_json FROM capture_job_deliveries WHERE delivery_id=?",
@@ -292,7 +349,7 @@ export async function acceptResult(
   await db.batch([
     db
       .prepare(
-        `INSERT OR IGNORE INTO capture_job_deliveries(delivery_id,request_json,response_json) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM capture_jobs WHERE job_id=? AND lease_id=? AND state=? AND attempt=?)${isCut ? " AND NOT EXISTS(SELECT 1 FROM inventory_cut_requests WHERE request_id=? AND derivative_json IS NOT NULL)" : ""}`,
+        `INSERT OR IGNORE INTO capture_job_deliveries(delivery_id,request_json,response_json) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM capture_jobs WHERE job_id=? AND lease_id=? AND state=? AND attempt=?${runningIntake ? " AND " + intakeClaimGuard(true) : ""})${isCut ? " AND NOT EXISTS(SELECT 1 FROM inventory_cut_requests WHERE request_id=? AND derivative_json IS NOT NULL)" : ""}`,
       )
       .bind(
         input.delivery_id,

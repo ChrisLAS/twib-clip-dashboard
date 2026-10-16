@@ -1,4 +1,5 @@
 export interface Env {
+  INTAKE_WORK_REQUESTS_ENABLED?: string;
   DB: D1Database;
   CAPTURE_JOBS_ENABLED?: string;
   CAPTURE_JOBS_APP_ORIGIN?: string;

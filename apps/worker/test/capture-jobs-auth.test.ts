@@ -187,7 +187,7 @@ it("reuse, source, episode and action grants fail closed when absent or invalid"
     { CAPTURE_JOBS_GRANT_SOURCE_ID: "nomad:number-one" },
     { CAPTURE_JOBS_GRANT_SHOW: "launch" },
     { CAPTURE_JOBS_GRANT_SHOW: undefined },
-    { CAPTURE_JOBS_GRANT_EPISODE: "128" },
+    { CAPTURE_JOBS_GRANT_EPISODE: "0" },
     { CAPTURE_JOBS_GRANT_EPISODE: undefined },
     { CAPTURE_JOBS_GRANT_SCOPES: undefined },
     { CAPTURE_JOBS_GRANT_SCOPES: "inventory:write" },
@@ -253,4 +253,21 @@ it("bearer, Drive and MCP credentials do not replace a signed job assertion", as
         now,
       ),
     ).rejects.toMatchObject({ status: 401 });
+});
+it("accepts an explicitly configured future exact episode without accepting wildcard scopes", async () => {
+  await expect(
+    authenticateCaptureJobs(
+      await request(),
+      { ...env, CAPTURE_JOBS_GRANT_EPISODE: "128" },
+      now,
+    ),
+  ).resolves.toBeUndefined();
+  for (const episode of ["*", "127,128", "0128", "0", "1000000"])
+    await expect(
+      authenticateCaptureJobs(
+        await request(),
+        { ...env, CAPTURE_JOBS_GRANT_EPISODE: episode },
+        now,
+      ),
+    ).rejects.toMatchObject({ status: 503 });
 });
