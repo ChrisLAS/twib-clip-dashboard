@@ -360,8 +360,7 @@ export async function retryIntakeWork(
   owner: string,
   now = Date.now(),
 ) {
-  if (!intakeWorkEnabled(env) || env.CAPTURE_JOBS_ENABLED !== "true")
-    throw unavailable();
+  if (!intakeWorkEnabled(env)) throw unavailable();
   const input = z
     .object({
       expectedAttempt: z.number().int().nonnegative().max(99),
@@ -370,18 +369,12 @@ export async function retryIntakeWork(
     .strict()
     .parse(value);
   const w = await get(env.DB, jobId, owner);
-  if (
-    !w ||
-    w.intake_id !== id ||
-    !(await current(env.DB, w)) ||
-    String(w.episode_number) !== env.CAPTURE_JOBS_GRANT_EPISODE
-  )
-    throw conflict();
+  if (!w || w.intake_id !== id || !(await current(env.DB, w))) throw conflict();
   const view = await workView(env, w);
   const target = input.expectedTargetId ?? jobId;
   if (target !== view.retryTargetId) {
     // A completed earlier stage may be reconciled, but never retry a different stage.
-    if (target === jobId) return view;
+    if (target === jobId || target === w.cut_request_id) return view;
     throw conflict();
   }
   if (w.cut_request_id) {
@@ -389,8 +382,6 @@ export async function retryIntakeWork(
     if (!cut || cut.owner !== owner) throw conflict();
     const spec = cutWireSchema.parse(JSON.parse(cut.request_json)).spec;
     const planning = spec.kind !== "range";
-    if (!(planning ? planningEnabled(env) : executionEnabled(env)))
-      throw unavailable();
     if (view.attempt !== input.expectedAttempt) {
       const retryId = await uuid(
         JSON.stringify(["intake-retry/v1", target, input.expectedAttempt]),
@@ -412,6 +403,10 @@ export async function retryIntakeWork(
       cut.proposal_json
     )
       return view;
+    if (!(planning ? planningEnabled(env) : executionEnabled(env)))
+      throw unavailable();
+    if (String(w.episode_number) !== env.CAPTURE_JOBS_GRANT_EPISODE)
+      throw conflict();
     if (!view.retryable) throw conflict();
     if (!cut.exec_state) await enqueueCut(env.DB, target, owner, now, planning);
     else
@@ -429,7 +424,6 @@ export async function retryIntakeWork(
       );
     return workView(env, w);
   }
-  if (!intakeDispatchEnabled(env)) throw unavailable();
   const job = await env.DB.prepare(
     "SELECT state,attempt,code FROM capture_jobs WHERE job_id=?",
   )
@@ -451,6 +445,9 @@ export async function retryIntakeWork(
   }
   if (job.state === "queued" || job.state === "running")
     return workView(env, w);
+  if (!intakeDispatchEnabled(env)) throw unavailable();
+  if (String(w.episode_number) !== env.CAPTURE_JOBS_GRANT_EPISODE)
+    throw conflict();
   const eligibility = {
     sql: `EXISTS(SELECT 1 FROM intake_work_requests w WHERE w.job_id=? AND ${intakeCurrentSql}) AND EXISTS(SELECT 1 FROM capture_jobs q WHERE q.job_id=? AND q.attempt=?)`,
     bindings: [jobId, jobId, input.expectedAttempt],

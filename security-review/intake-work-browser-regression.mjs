@@ -1,4 +1,4 @@
-/* global process, console, sessionStorage, localStorage, Storage */
+/* global process, console, sessionStorage, localStorage, Storage, navigator, window */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -284,6 +284,154 @@ try {
     .getByRole("button", { name: "Retry work confirmation", exact: true })
     .click();
   await page.getByText("Saved · revision 3", { exact: false }).waitFor();
+
+  // Exact stale-tab race: B remembers Q1 while A clears Q1 then reserves Q2.
+  // B's later Q1 reconciliation must never delete or overwrite A's Q2.
+  const raceContext = await browser.newContext();
+  const tabA = await raceContext.newPage();
+  const tabB = await raceContext.newPage();
+  let raceJobs = [];
+  let firstQ1 = true;
+  const racePosts = [];
+  await raceContext.route("**/api/intake/**", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        json: { enabled: true, dispatchEnabled: false, jobs: raceJobs },
+      });
+      return;
+    }
+    const body = route.request().postDataJSON();
+    racePosts.push(body);
+    if (body.expectedRevision === 2 || firstQ1) {
+      firstQ1 = false;
+      await route.abort("failed");
+      return;
+    }
+    raceJobs = [makeJob(body)];
+    await route.fulfill({ json: raceJobs[0] });
+  });
+  await tabA.goto(base);
+  await tabA
+    .getByRole("button", { name: "Save work request", exact: true })
+    .click();
+  await tabA
+    .getByRole("button", { name: "Retry work confirmation", exact: true })
+    .waitFor();
+  await tabB.goto(base);
+  await tabB
+    .getByRole("button", { name: "Retry work confirmation", exact: true })
+    .waitFor();
+  await tabA
+    .getByRole("button", { name: "Retry work confirmation", exact: true })
+    .click();
+  await tabA.getByText("Saved · revision 1", { exact: false }).waitFor();
+  await tabA.goto(base + "?revision=2");
+  await tabA
+    .getByRole("button", { name: "Save work request", exact: true })
+    .click();
+  await tabA
+    .getByRole("button", { name: "Retry work confirmation", exact: true })
+    .waitFor();
+  const q2Envelope = await tabA.evaluate(() =>
+    localStorage.getItem("twib:intake-work:v2:synthetic-owner"),
+  );
+  assert.equal(JSON.parse(q2Envelope).attempt.expectedRevision, 2);
+  await tabB.getByRole("button", { name: "Refresh work status" }).click();
+  await tabB.getByRole("alert").waitFor();
+  assert.equal(
+    await tabB.evaluate(() =>
+      localStorage.getItem("twib:intake-work:v2:synthetic-owner"),
+    ),
+    q2Envelope,
+  );
+  assert.equal(
+    await tabB
+      .getByRole("button", { name: "Retry work confirmation", exact: true })
+      .isDisabled(),
+    true,
+  );
+  await screenshot(tabB, "stale-tab-preserves-new-pending");
+  await tabB.reload();
+  await tabB
+    .getByText("Revision 2 · normal priority.", { exact: false })
+    .waitFor();
+  assert.deepEqual(racePosts, [
+    { expectedRevision: 1, priority: "normal" },
+    { expectedRevision: 1, priority: "normal" },
+    { expectedRevision: 2, priority: "normal" },
+  ]);
+  await raceContext.close();
+
+  // Hold the real browser lock, switch account while reserve is suspended,
+  // then release: the old owner's durable intent must survive without a POST.
+  const lockContext = await browser.newContext();
+  const lockPage = await lockContext.newPage();
+  let lockPosts = 0;
+  await lockContext.route("**/api/intake/**", async (route) => {
+    if (route.request().method() !== "GET") lockPosts++;
+    await route.fulfill({
+      json: { enabled: true, dispatchEnabled: false, jobs: [] },
+    });
+  });
+  await lockPage.goto(base);
+  await lockPage
+    .getByText("Requests can be saved.", { exact: false })
+    .waitFor();
+  await lockPage.evaluate(async () => {
+    window.syntheticPostCount = 0;
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      if (init?.method === "POST") window.syntheticPostCount++;
+      return originalFetch(input, init);
+    };
+    await new Promise((acquired) => {
+      void navigator.locks.request(
+        "twib:intake-work:v2:synthetic-owner",
+        async () => {
+          await new Promise((release) => {
+            window.releaseSyntheticLock = release;
+            acquired();
+          });
+        },
+      );
+    });
+  });
+  await lockPage
+    .getByRole("button", { name: "Save work request", exact: true })
+    .click();
+  await lockPage.getByRole("button", { name: "Switch owner" }).click();
+  await lockPage
+    .getByText("Requests can be saved.", { exact: false })
+    .waitFor();
+  await lockPage.evaluate(async () => {
+    window.releaseSyntheticLock();
+    await navigator.locks.request(
+      "twib:intake-work:v2:synthetic-owner",
+      () => {},
+    );
+  });
+  const ownerLockResult = await lockPage.evaluate(() => ({
+    posts: window.syntheticPostCount,
+    oldOwner: JSON.parse(
+      localStorage.getItem("twib:intake-work:v2:synthetic-owner"),
+    ),
+    newOwner: localStorage.getItem("twib:intake-work:v2:other-owner"),
+  }));
+  assert.equal(ownerLockResult.posts, 0);
+  assert.equal(lockPosts, 0);
+  assert.equal(ownerLockResult.oldOwner.owner, "synthetic-owner");
+  assert.deepEqual(ownerLockResult.oldOwner.attempt, {
+    kind: "save",
+    intakeId: "synthetic-intake",
+    expectedRevision: 1,
+    priority: "normal",
+  });
+  assert.equal(ownerLockResult.newOwner, null);
+  await lockPage.getByRole("button", { name: "Switch owner" }).click();
+  await lockPage
+    .getByRole("button", { name: "Retry work confirmation", exact: true })
+    .waitFor();
+  await lockContext.close();
 
   enabled = false;
   await page.goto(base + "?revision=4");

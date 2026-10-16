@@ -5,6 +5,8 @@ import {
   intakeWorkLabel,
   parseWorkAttempt,
   parseWorkEnvelope,
+  updateWorkOutbox,
+  workOutboxKey,
   workAttemptConfirmed,
 } from "./intake-work-panel";
 const job: IntakeWorkView = {
@@ -23,6 +25,45 @@ const job: IntakeWorkView = {
 };
 afterEach(() => vi.unstubAllGlobals());
 describe("intake work recovery", () => {
+  it("never clears or overwrites a different tab's pending immutable envelope", async () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    };
+    const request = vi.fn(
+      async (_name: string, _options: unknown, callback: () => boolean) =>
+        callback(),
+    );
+    vi.stubGlobal("localStorage", storage);
+    vi.stubGlobal("sessionStorage", { getItem: () => null });
+    vi.stubGlobal("navigator", { locks: { request } });
+    const q1 = {
+      kind: "save" as const,
+      intakeId: "intake-a",
+      expectedRevision: 1,
+      priority: "normal" as const,
+    };
+    const q2 = { ...q1, expectedRevision: 2 };
+    expect(await updateWorkOutbox("owner-a", q1, "reserve")).toBe(true);
+    expect(await updateWorkOutbox("owner-a", q1, "clear")).toBe(true);
+    expect(await updateWorkOutbox("owner-a", q2, "reserve")).toBe(true);
+    const exactQ2 = storage.getItem(workOutboxKey("owner-a"));
+    expect(await updateWorkOutbox("owner-a", q1, "clear")).toBe(false);
+    expect(await updateWorkOutbox("owner-a", q1, "reserve")).toBe(false);
+    expect(storage.getItem(workOutboxKey("owner-a"))).toBe(exactQ2);
+    expect(await updateWorkOutbox("owner-a", q2, "reserve")).toBe(true);
+    expect(await updateWorkOutbox("owner-a", q2, "clear")).toBe(true);
+    expect(storage.getItem(workOutboxKey("owner-a"))).toBeNull();
+    expect(
+      request.mock.calls.every((call) => call[0] === workOutboxKey("owner-a")),
+    ).toBe(true);
+    vi.stubGlobal("navigator", {});
+    await expect(updateWorkOutbox("owner-a", q1, "reserve")).rejects.toThrow(
+      "locking is unavailable",
+    );
+  });
   it("requires schema, scope, and the exact authenticated owner", () => {
     const payload = {
       version: 2,

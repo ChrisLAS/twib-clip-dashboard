@@ -29,7 +29,7 @@ Stages include saved, queued, downloading, awaiting inventory, planning, cutting
 
 The root job ID identifies the work request. A retry target may identify its downstream plan or cut. The browser retains that exact target and attempt; it must never redirect an uncertain capture retry to a later cut. Legacy calls without a target refer to the root only. Retry controls appear only when the server explicitly reports `retryable: true`.
 
-The owner-scoped browser outbox uses a versioned localStorage envelope with scope, owner and exact request. It stores no CSRF token. Writes are read back before POST. Account changes remount the panel; malformed, wrong-owner, legacy unscoped or unavailable storage blocks submissions. Reload and tab closure preserve uncertain requests. Refresh reconciles a matching target after its attempt advances, or when the same attempt is queued/running. Mounting, editing or refreshing never automatically submits work.
+The owner-scoped browser outbox uses a versioned localStorage envelope with scope, owner and exact request. It stores no CSRF token. Writes are read back before POST. Owner-scoped exclusive Web Locks protect reservation and exact-envelope removal across tabs; unavailable locking fails closed, and a stale tab cannot remove or overwrite a newer pending request. Account changes remount the panel; malformed, wrong-owner, legacy unscoped or unavailable storage blocks submissions. Reload and tab closure preserve uncertain requests. Refresh reconciles a matching target after its attempt advances, or when the same attempt is queued/running. Mounting, editing or refreshing never automatically submits work.
 
 ## Migration and disabled pilot checklist
 
@@ -41,7 +41,7 @@ Before any pilot, obtain separate approval for the target environment, episode, 
 - Authenticated owner, active draft episode and unchanged intake/workspace revision.
 - Narrow source/show/episode, operation and time-bounded worker grants; no unrelated credential or scope expansion.
 - Capture, planning and cut gates independently; saved work stays honestly saved when its next stage is disabled.
-- Inventory receipt/provenance, transcript and native-parent requirements before downstream work.
+- Inventory receipt/provenance, transcript and native-parent requirements before downstream work. Capture proof must match the current positive job attempt basename and a worker-supported media extension, then independently match latest native inventory hash/size/duration.
 - Separate original and derivative review, with no automatic human-review credit.
 
 **Current limitation:** inventory ingestion authentication remains pinned to episode 127 (`apps/worker/src/inventory/auth.ts`). This slice is not general multi-episode ingestion. A non-127 pilot requires a separately reviewed ingestion-scope change; creating an episode-bound request does not remove that blocker.

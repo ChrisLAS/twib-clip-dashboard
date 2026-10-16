@@ -254,6 +254,10 @@ export async function acceptResult(
       !request ||
       request.kind ||
       input.state !== "succeeded" ||
+      input.attempt < 1 ||
+      !new RegExp(
+        `^new-review/${input.job_id}-a${input.attempt}\\.(mp4|webm|mkv|mov|m4v|mp3|m4a|wav|flac|ogg|opus)$`,
+      ).test(proof.ref) ||
       proof.job_id !== input.job_id ||
       proof.episode !== request.episode ||
       proof.show !== request.show ||

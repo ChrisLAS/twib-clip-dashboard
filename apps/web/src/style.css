@@ -2297,14 +2297,14 @@ button.primary-action:hover {
   font-size: 12px;
   color: var(--muted);
 }
-.intake-card {
+:is(.intake-card, .intake-work-card) {
   display: flex;
   align-items: flex-start;
   gap: 14px;
   padding: 17px 0;
   border-top: 1px solid var(--line);
 }
-.intake-card:last-child {
+:is(.intake-card, .intake-work-card):last-child {
   padding-bottom: 0;
 }
 .intake-highlight {
@@ -2343,13 +2343,13 @@ button.primary-action:hover {
 .intake-source svg {
   flex-shrink: 0;
 }
-.intake-card p {
+:is(.intake-card, .intake-work-card) p {
   font-size: 13px;
   margin: 7px 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.intake-card small {
+:is(.intake-card, .intake-work-card) small {
   display: block;
   font-size: 11px;
   color: var(--muted);
@@ -2526,10 +2526,10 @@ button.primary-action:hover {
     flex-wrap: wrap;
     gap: 10px;
   }
-  .intake-card {
+  :is(.intake-card, .intake-work-card) {
     flex-wrap: wrap;
   }
-  .intake-card > button {
+  :is(.intake-card, .intake-work-card) > button {
     margin-left: 58px;
   }
   .manual-intake {
@@ -2567,7 +2567,7 @@ button.primary-action:hover {
   .intake-icon {
     padding: 8px;
   }
-  .intake-card > button {
+  :is(.intake-card, .intake-work-card) > button {
     margin-left: 48px;
   }
   .intake-form-actions > span {

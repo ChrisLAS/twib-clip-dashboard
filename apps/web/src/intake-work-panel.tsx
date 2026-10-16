@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   IntakeWorkList,
   IntakeWorkPriority,
@@ -60,6 +60,44 @@ function readOwnerAttempt(owner: string): {
         "Local work confirmation storage is unavailable or cannot be verified for this account. Work requests are blocked.",
     };
   }
+}
+export async function updateWorkOutbox(
+  owner: string,
+  attempt: WorkAttempt,
+  action: "reserve" | "clear",
+): Promise<boolean> {
+  if (!owner || !navigator.locks?.request)
+    throw new Error(
+      "Safe work confirmation locking is unavailable. Work requests are blocked.",
+    );
+  return navigator.locks.request(
+    workOutboxKey(owner),
+    { mode: "exclusive" },
+    () => {
+      const stored = readOwnerAttempt(owner);
+      if (stored.error) throw new Error(stored.error);
+      const envelope = JSON.stringify({
+        version: 2,
+        scope: "manual-intake-work",
+        owner,
+        attempt,
+      });
+      const key = workOutboxKey(owner);
+      const raw = localStorage.getItem(key);
+      // Compare the complete immutable envelope, never just the owner or root job.
+      if (raw !== null && raw !== envelope) return false;
+      if (action === "clear") {
+        if (raw === envelope) localStorage.removeItem(key);
+        if (localStorage.getItem(key) !== null)
+          throw new Error("Work confirmation could not be cleared.");
+      } else {
+        localStorage.setItem(key, envelope);
+        if (localStorage.getItem(key) !== envelope)
+          throw new Error("Work confirmation could not be verified.");
+      }
+      return true;
+    },
+  );
 }
 export function parseWorkAttempt(raw: string | null): WorkAttempt | null {
   try {
@@ -170,16 +208,28 @@ function OwnerIntakeWorkPanel({
   const [message, setMessage] = useState("");
   const lock = useRef(false);
   const pendingRef = useRef(pending);
-  function clearPending() {
+  const live = useRef({ mounted: true, owner });
+  useLayoutEffect(() => {
+    live.current = { mounted: true, owner };
+    return () => {
+      live.current.mounted = false;
+    };
+  }, [owner]);
+  async function clearPending(attempt: WorkAttempt) {
     try {
-      localStorage.removeItem(workOutboxKey(owner));
+      if (!(await updateWorkOutbox(owner, attempt, "clear"))) {
+        setStorageError(
+          "Another work confirmation is pending for this account. Its record was preserved. Reload before continuing.",
+        );
+        return;
+      }
+      pendingRef.current = null;
+      setPending(null);
     } catch {
       setStorageError(
-        "Local confirmation could not be cleared. Work requests are blocked.",
+        "Local confirmation could not be safely cleared. Work requests are blocked.",
       );
     }
-    pendingRef.current = null;
-    setPending(null);
   }
   async function refresh(signal?: AbortSignal) {
     try {
@@ -190,7 +240,7 @@ function OwnerIntakeWorkPanel({
         pendingRef.current &&
         workAttemptConfirmed(pendingRef.current, latest.jobs)
       )
-        clearPending();
+        await clearPending(pendingRef.current);
       setMessage("");
     } catch (error) {
       if (!signal?.aborted)
@@ -215,35 +265,23 @@ function OwnerIntakeWorkPanel({
     setBusy(true);
     onBusy(true);
     try {
-      // Persist before dispatch so an uncertain outcome can safely be replayed after reload.
-      const stored = readOwnerAttempt(owner);
-      if (
-        stored.error ||
-        (stored.attempt &&
-          JSON.stringify(stored.attempt) !== JSON.stringify(attempt))
-      ) {
-        setStorageError(
-          stored.error ||
-            "Another work confirmation is pending for this account. Reload before continuing.",
-        );
-        return;
-      }
-      const envelope = JSON.stringify({
-        version: 2,
-        scope: "manual-intake-work",
-        owner,
-        attempt,
-      });
+      // Reserve under the same cross-tab lock used for compare-and-remove.
       try {
-        localStorage.setItem(workOutboxKey(owner), envelope);
-        if (localStorage.getItem(workOutboxKey(owner)) !== envelope)
-          throw new Error("Storage verification failed");
+        if (!(await updateWorkOutbox(owner, attempt, "reserve"))) {
+          setStorageError(
+            "Another work confirmation is pending for this account. Reload before continuing.",
+          );
+          return;
+        }
       } catch {
         setStorageError(
           "The work confirmation could not be stored safely. No request was sent.",
         );
         return;
       }
+      // The owner may have changed while the cross-tab reservation awaited its lock.
+      // Keep the old owner's durable intent, but never dispatch from an unmounted owner.
+      if (!live.current.mounted || live.current.owner !== owner) return;
       pendingRef.current = attempt;
       setPending(attempt);
       const job =
@@ -277,13 +315,13 @@ function OwnerIntakeWorkPanel({
             ],
           },
       );
-      clearPending();
+      await clearPending(attempt);
       setMessage(
         "Work request saved. Check the status below for processing progress.",
       );
     } catch (error) {
       if (error instanceof RequestError && error.status < 500) {
-        clearPending();
+        await clearPending(attempt);
         setStatus(null);
         setMessage(error.message + " Refresh work status before trying again.");
       } else
@@ -366,7 +404,7 @@ function OwnerIntakeWorkPanel({
           );
           const draftMismatch = hasDraftChanges(item);
           return (
-            <article key={item.id} className="intake-card">
+            <article key={item.id} className="intake-work-card">
               <div className="intake-card-main">
                 <a href={`#intake-${item.id}`}>
                   View saved intake · revision {item.revision}

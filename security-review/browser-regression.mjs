@@ -2033,7 +2033,7 @@ try {
         .isVisible()) &&
       (await page
         .locator(".manual-intake")
-        .getByText(/No processor is connected yet\. Saved submissions/)
+        .getByText(/Saved submissions are not playable clips or ready for review\. Save a separate work request/)
         .isVisible()) &&
       (await page.locator(".clip-row,video").count()) === 0 &&
       !(await page

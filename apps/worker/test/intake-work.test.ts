@@ -347,7 +347,7 @@ async function captured(range?: [number, number]) {
   const proof = {
     version: 1,
     job_id: a.jobId,
-    ref: "new-review/synthetic.mp4",
+    ref: `new-review/${a.jobId}-a1.mp4`,
     sha256: "a".repeat(64),
     size_bytes: 100,
     duration_seconds: 600,
@@ -782,5 +782,94 @@ it("preserves transport capacity and creates no orphan work when full", async ()
   ).rejects.toMatchObject({ status: 429, code: "JOB_CAPACITY" });
   expect(
     raw.prepare("SELECT count(*) n FROM intake_work_requests").get()?.n,
+  ).toBe(0);
+});
+
+it("capture proof binds current job and positive attempt basename with worker-supported extension", async () => {
+  enabled();
+  intake();
+  const a = await requestIntakeWork(
+    env,
+    "intake-1",
+    { expectedRevision: 1, priority: "normal" },
+    "owner",
+    1,
+  );
+  await claimJob(db, { request_id: id(60) }, 2, scope);
+  const proof = {
+    version: 1,
+    job_id: a.jobId,
+    ref: `new-review/${a.jobId}-a1.mp4`,
+    sha256: "a".repeat(64),
+    size_bytes: 100,
+    duration_seconds: 3,
+    show: "twib",
+    episode: 128,
+    editorial_ready: false,
+  };
+  const delivery = {
+    delivery_id: id(61),
+    job_id: a.jobId,
+    lease_id: id(60),
+    state: "succeeded",
+    attempt: 1,
+    code: null,
+    capture: proof,
+  };
+  for (const ref of [
+    `new-review/${id(99)}-a1.mp4`,
+    `new-review/${a.jobId}-a2.mp4`,
+    `new-review/${a.jobId}-a1.exe`,
+    `new-review/${a.jobId}-a1xmp4`,
+  ])
+    await expect(
+      acceptResult(db, { ...delivery, capture: { ...proof, ref } }, 3),
+    ).rejects.toMatchObject({ status: 409 });
+  await expect(
+    acceptResult(
+      db,
+      {
+        ...delivery,
+        attempt: 0,
+        capture: { ...proof, ref: `new-review/${a.jobId}-a0.mp4` },
+      },
+      3,
+    ),
+  ).rejects.toMatchObject({ status: 409 });
+  expect(
+    raw.prepare("SELECT count(*) n FROM capture_job_deliveries").get()?.n,
+  ).toBe(0);
+  await acceptResult(
+    db,
+    {
+      ...delivery,
+      capture: { ...proof, ref: `new-review/${a.jobId}-a1.webm` },
+    },
+    3,
+  );
+});
+
+it("reconciles an earlier uncertain retry after target advances and dispatch is disabled without mutation", async () => {
+  const { a, proof } = await captured([1000, 12000]);
+  await observe(proof);
+  await advanceIntakeWork(env, a.jobId);
+  const before = raw
+    .prepare("SELECT * FROM capture_jobs ORDER BY job_id")
+    .all();
+  env.CAPTURE_JOBS_ENABLED = "false";
+  env.CAPTURE_JOBS_GRANT_EPISODE = undefined;
+  const view = await retryIntakeWork(
+    env,
+    "intake-1",
+    a.jobId,
+    { expectedAttempt: 0, expectedTargetId: a.jobId },
+    "owner",
+  );
+  expect(view.retryTargetId).not.toBe(a.jobId);
+  expect(
+    raw.prepare("SELECT * FROM capture_jobs ORDER BY job_id").all(),
+  ).toEqual(before);
+  expect(
+    raw.prepare("SELECT count(*) n FROM capture_job_retries").get()?.n,
   ).toBe(0);
 });
