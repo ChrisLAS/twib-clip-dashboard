@@ -68,6 +68,9 @@ export async function authenticateInventory(
   const team = env.INVENTORY_ACCESS_TEAM_DOMAIN;
   const audience = env.INVENTORY_ACCESS_AUD;
   const client = env.INVENTORY_ACCESS_CLIENT_ID;
+  // One explicit canonical episode in the manifest schema range (1–999999).
+  // Never fall back to the historic pilot or infer scope from a request.
+  const episode = env.INVENTORY_GRANT_EPISODE_NUMBER;
   const starts = Date.parse(env.INVENTORY_GRANT_STARTS_AT ?? "");
   const expires = Date.parse(env.INVENTORY_GRANT_EXPIRES_AT ?? "");
   let originUrl: URL;
@@ -92,6 +95,8 @@ export async function authenticateInventory(
     !client ||
     !/^[a-zA-Z0-9_-]+\.access$/.test(client) ||
     client.length > 128 ||
+    typeof episode !== "string" ||
+    !/^[1-9][0-9]{0,5}$/.test(episode) ||
     !Number.isFinite(starts) ||
     !Number.isFinite(expires) ||
     expires <= starts ||
@@ -190,8 +195,8 @@ export async function authenticateInventory(
   }
   return {
     sourceId: "nomad:number-one",
-    episodeNumber: 127,
-    episodeId: await inventoryEpisodeId(127),
+    episodeNumber: Number(episode),
+    episodeId: await inventoryEpisodeId(Number(episode)),
     scope: "inventory:write",
     expiresAt: expires,
     allowEditorialContext: false,

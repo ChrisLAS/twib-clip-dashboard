@@ -138,6 +138,7 @@ it("job JWT cannot ingest inventory even when both grants use the same identity"
     ...reused,
     INVENTORY_INGEST_ENABLED: "true",
     INVENTORY_APP_ORIGIN: "https://jobs.example.com",
+    INVENTORY_GRANT_EPISODE_NUMBER: "127",
     INVENTORY_GRANT_STARTS_AT: env.CAPTURE_JOBS_GRANT_STARTS_AT,
     INVENTORY_GRANT_EXPIRES_AT: env.CAPTURE_JOBS_GRANT_EXPIRES_AT,
   } as Env;

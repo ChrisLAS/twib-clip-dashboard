@@ -45,6 +45,9 @@ approved. None is present in tracked Wrangler configuration:
 - `INVENTORY_ACCESS_TEAM_DOMAIN`: approved `*.cloudflareaccess.com` team.
 - `INVENTORY_ACCESS_AUD`: dedicated 64-hex application audience, not `ACCESS_AUD`.
 - `INVENTORY_ACCESS_CLIENT_ID`: exact service Client ID ending in `.access`.
+- `INVENTORY_GRANT_EPISODE_NUMBER`: one explicitly approved episode, canonical
+  decimal integer from 1 through 999999. Required even for the historic 127 pilot;
+  missing, zero, padded, signed, fractional, list or wildcard values stay disabled.
 - `INVENTORY_GRANT_STARTS_AT`, `INVENTORY_GRANT_EXPIRES_AT`: fixed absolute dates;
   expiry is after start and at most 24 hours later. Never recompute/extend per request.
 
@@ -56,9 +59,13 @@ Only exact POST on the configured origin/path without query is eligible; v1 and
 sibling reserved paths stay disabled. Owner/demo/Drive/MCP auth never substitutes.
 
 The server constructs the grant, never the request: source `nomad:number-one`,
-show `twib`, episode 127, ID
-`episode_616a1ec58e997fd5fb97fa27ec48153b57e83418ab576c463c537533a6f29e72`,
+show `twib`, the single configured episode number and its deterministically derived
+`inventoryEpisodeId` (for 127,
+`episode_616a1ec58e997fd5fb97fa27ec48153b57e83418ab576c463c537533a6f29e72`),
 `inventory:write`, fixed expiry, no origin hosts and no editorial context.
+There is no default episode and no active-workspace inference. Changing episodes
+requires a separately approved private grant configuration; this source change
+does not activate or extend any live grant.
 All item origins must be `[]` and all observation contexts `{}`. The receiver
 rejects unprojected payloads rather than scrubbing and acknowledging a changed
 payload. Prepare the reviewed projection before hashing/allocating an immutable

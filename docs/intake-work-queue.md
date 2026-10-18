@@ -44,7 +44,7 @@ Before any pilot, obtain separate approval for the target environment, episode, 
 - Inventory receipt/provenance, transcript and native-parent requirements before downstream work. Capture proof must match the current positive job attempt basename and a worker-supported media extension, then independently match latest native inventory hash/size/duration.
 - Separate original and derivative review, with no automatic human-review credit.
 
-**Current limitation:** inventory ingestion authentication remains pinned to episode 127 (`apps/worker/src/inventory/auth.ts`). This slice is not general multi-episode ingestion. A non-127 pilot requires a separately reviewed ingestion-scope change; creating an episode-bound request does not remove that blocker.
+**Inventory grant requirement:** inventory ingestion requires an explicit single `INVENTORY_GRANT_EPISODE_NUMBER` (1–999999), with no default or active-workspace inference. Missing or malformed configuration fails closed, including for the historic episode-127 pilot. This is not general multi-episode ingestion: each pilot still requires a separately approved exact episode and time-bounded private grant. Creating an episode-bound request does not activate inventory ingestion. See [the pilot contract](number-one-pilot.md).
 
 ## Verification
 

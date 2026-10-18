@@ -15,7 +15,8 @@ services, schedules, media paths, or production database changes are included.
 - `acceptInventory` requires an explicit server-side `InventoryGrant` binding
   source, exact episode ID/number, inventory:write, expiry and privacy policy.
   Never construct it from unverified request JSON/headers. The pilot adapter fixes
-  source/episode127 and rejects all origins/context before persistence.
+  source `nomad:number-one` and one explicitly configured episode (no default),
+  and rejects all origins/context before persistence.
 - Owner Access, Drive OAuth, browser CSRF, demo and temporary MCP OAuth cannot
   construct a producer grant. Dedicated machine verification occurs before reading
   the bounded body. Owner routing/authentication remains unchanged.

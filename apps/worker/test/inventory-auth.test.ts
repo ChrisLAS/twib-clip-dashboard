@@ -4,7 +4,11 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import worker from "../src/index";
 import type { Env } from "../src/env";
-import type { InventoryEnvelope } from "../src/inventory/contract";
+import {
+  inventoryEpisodeId,
+  type InventoryEnvelope,
+} from "../src/inventory/contract";
+import { authenticateInventory } from "../src/inventory/auth";
 const state = vi.hoisted(() => ({
   key: undefined as CryptoKey | undefined,
   failure: undefined as Error | undefined,
@@ -86,6 +90,7 @@ beforeEach(() => {
     INVENTORY_ACCESS_TEAM_DOMAIN: "synthetic.cloudflareaccess.com",
     INVENTORY_ACCESS_AUD: "a".repeat(64),
     INVENTORY_ACCESS_CLIENT_ID: "synthetic-client.access",
+    INVENTORY_GRANT_EPISODE_NUMBER: "127",
     INVENTORY_GRANT_STARTS_AT: new Date(now - 60000).toISOString(),
     INVENTORY_GRANT_EXPIRES_AT: new Date(now + 3600000).toISOString(),
   };
@@ -140,6 +145,7 @@ describe("disabled-by-default inventory machine authentication", () => {
     "INVENTORY_ACCESS_TEAM_DOMAIN",
     "INVENTORY_ACCESS_AUD",
     "INVENTORY_ACCESS_CLIENT_ID",
+    "INVENTORY_GRANT_EPISODE_NUMBER",
     "INVENTORY_GRANT_STARTS_AT",
     "INVENTORY_GRANT_EXPIRES_AT",
     "ACCESS_AUD",
@@ -156,6 +162,81 @@ describe("disabled-by-default inventory machine authentication", () => {
   ])("invalid config %s=%s stays closed", async (field, value) => {
     (env as unknown as Record<string, string>)[field] = value;
     await denied(request(), 503);
+  });
+  it.each([
+    "",
+    "0",
+    "-1",
+    "1.5",
+    "128.0",
+    "1e2",
+    "+128",
+    "0128",
+    " 128",
+    "128 ",
+    "128\n",
+    "127,128",
+    "*",
+    "1000000",
+    "9007199254740991",
+  ])(
+    "invalid episode grant %j stays closed before body consumption",
+    async (value) => {
+      env.INVENTORY_GRANT_EPISODE_NUMBER = value;
+      const req = request(await token());
+      await denied(req, 503);
+      expect(req.bodyUsed).toBe(false);
+    },
+  );
+  it.each([1, 127, 128, 999999])(
+    "binds the exact configured episode %i",
+    async (episode) => {
+      env.INVENTORY_GRANT_EPISODE_NUMBER = String(episode);
+      await expect(
+        authenticateInventory(request(await token()), env, now),
+      ).resolves.toMatchObject({
+        sourceId: "nomad:number-one",
+        episodeNumber: episode,
+        episodeId: await inventoryEpisodeId(episode),
+        scope: "inventory:write",
+        allowEditorialContext: false,
+        originHosts: [],
+      });
+      expect(db.prepare).not.toHaveBeenCalled();
+    },
+  );
+  it("a 128 grant rejects the historic 127 envelope before DB access", async () => {
+    env.INVENTORY_GRANT_EPISODE_NUMBER = "128";
+    await denied(request(await token()), 403);
+  });
+  it("a 128 grant rejects a mismatched episode ID before DB access", async () => {
+    env.INVENTORY_GRANT_EPISODE_NUMBER = "128";
+    envelope.manifest.episode.number = 128;
+    await denied(request(await token()), 403);
+  });
+  it("a 128 grant rejects another source before DB access", async () => {
+    env.INVENTORY_GRANT_EPISODE_NUMBER = "128";
+    envelope.manifest.episode.number = 128;
+    envelope.manifest.episode.id = await inventoryEpisodeId(128);
+    envelope.manifest.source_id = "other:source";
+    await denied(request(await token()), 422);
+  });
+  it("commits and exactly replays a matching episode 128 envelope", async () => {
+    env.INVENTORY_GRANT_EPISODE_NUMBER = "128";
+    envelope.manifest.episode.number = 128;
+    envelope.manifest.episode.id = await inventoryEpisodeId(128);
+    const jwt = await token();
+    const response = await worker.fetch(request(jwt), env);
+    expect(response.status).toBe(200);
+    const receipt = await response.json();
+    expect(await (await worker.fetch(request(jwt), env)).json()).toEqual(
+      receipt,
+    );
+    expect(db.batch).toHaveBeenCalledTimes(1);
+    expect(
+      sqlite.prepare("SELECT episode_id FROM inventory_snapshots").get()
+        ?.episode_id,
+    ).toBe(envelope.manifest.episode.id);
   });
   it("expired fixed grant fails before body consumption", async () => {
     env.INVENTORY_GRANT_EXPIRES_AT = new Date(now).toISOString();
