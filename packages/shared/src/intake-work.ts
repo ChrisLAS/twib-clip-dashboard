@@ -16,6 +16,14 @@ export interface IntakeWorkView {
   retryable?: boolean;
   retryTargetId?: string;
   cutRequest?: InventoryCutRequest | null;
+  rangeSelection?: {
+    expectedCutRequestId: string;
+    expectedRequestRevision: string;
+    expectedParentVersion: string;
+    expectedRevision: number;
+    expectedWorkspaceRevision: number;
+    episodeNumber: number;
+  } | null;
 }
 export interface IntakeWorkList {
   enabled: boolean;

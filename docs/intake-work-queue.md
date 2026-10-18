@@ -55,3 +55,44 @@ Before any pilot, obtain separate approval for the target environment, episode, 
 Run frontend lint, typecheck and build plus backend/full repository checks before rollout. Passing local tests does not activate the pilot.
 
 Inventory-triggered recovery advances at most 20 current, unlinked requests per event, least recently checked first. Completed links are excluded so old work cannot starve new work. This is a bounded single-link pilot; no autonomous background sweep or unattended multi-kind schedule is installed.
+
+## Human-selected range after full-source capture
+
+A full-source intake can pause after capture and native inventory with planning
+and model providers disabled. Its immutable first-pass cut remains `needs_review`.
+After listening or reviewing a local transcript, an authenticated owner can choose
+one exact range without changing the intake revision or capturing again:
+
+1. Read `GET /api/intake/work`. Retain the original work's `rangeSelection` object.
+2. Submit `POST /api/intake/:intakeId/work/:jobId/range` with exact same-origin
+   owner session and CSRF protection. The JSON body contains every field from
+   `rangeSelection` plus `range: {kind: "range", startSeconds, endSeconds}`.
+3. The range must use millisecond precision, start at or after zero, end within the
+   verified original duration, and last at most 180 seconds. The source, native
+   identities, hash, path and inventory proof are derived on the server.
+4. The response is `{requestId, sourcePlanRequestId, selectionOrigin: "owner_range"}`.
+   Work-list readback follows this linked child through queueing, cutting and
+   unreviewed derivative receipt. The original intake notes, work spec and
+   first-pass request remain unchanged. No model proposal or human approval is
+   invented, and no source capture is queued again.
+
+Only an unplanned first-pass request with no execution job/proposal/derivative is
+eligible. Current owner/intake/workspace/episode/parent-version bindings, native
+capture evidence and duplicate-parent checks are mandatory. New selection also
+requires enabled intake/capture/cut gates, exact source/show/episode/action and
+cut-operation grants, and a current configured grant interval of at most 24 hours.
+The pilot may configure a shorter window (for example two hours); selection never
+extends it. Planning and automatic-first-pass gates are irrelevant to this owner
+choice. Already-started planning must be reconciled separately.
+
+The child identity is deterministic per original request. Same-choice replay
+acknowledges the same committed child even after grant expiry, without extending
+or requeueing it; owner/current-intent/parent checks still apply. Changed choices
+conflict. Atomic guards and the existing unique child link prevent competing
+choices or a delayed original-plan enqueue from creating two work paths. Do not
+edit database rows or replace original cut JSON to change direction.
+
+This endpoint does not generalize the separate inventory review UI: its numeric
+inventory selector and ordinary review POST still retain the historic episode-127
+scope. Episode-128 manual range selection uses the exact intake-bound endpoint
+above. Broadening ordinary inventory review needs its own workspace-bound change.

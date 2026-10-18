@@ -159,3 +159,22 @@ it("disabled owner gate rejects before authentication or JSON parsing", async ()
     sqlite.prepare("SELECT count(*) AS n FROM capture_jobs").get()?.n,
   ).toBe(0);
 });
+it("intake manual-range route requires real owner, exact origin and CSRF before configuration or DB access", async () => {
+  const path =
+    "/api/intake/synthetic-intake/work/00000000-0000-4000-8000-000000000001/range";
+  expect((await request({ path })).status).toBe(401);
+  expect((await request({ path, jwt: await token(true) })).status).toBe(401);
+  const jwt = await token(),
+    csrf = await csrfToken("synthetic-owner", env, false);
+  expect((await request({ path, jwt, csrf })).status).toBe(403);
+  expect(
+    (await request({ path, jwt, origin: env.APP_ORIGIN, csrf: "invalid" }))
+      .status,
+  ).toBe(403);
+  expect(
+    (await request({ path, jwt, origin: env.APP_ORIGIN, csrf })).status,
+  ).toBe(503);
+  expect(sqlite.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(
+    0,
+  );
+});

@@ -230,3 +230,134 @@ it("enforces intake gates and current-intake guards through offline workerd D1",
     n: 0,
   });
 }, 30000);
+it("selects one owner range through real offline workerd D1 with planning disabled", async () => {
+  const work = fileURLToPath(
+    new URL("../src/capture-jobs/intake-work.ts", import.meta.url),
+  );
+  const store = fileURLToPath(
+    new URL("../src/capture-jobs/store.ts", import.meta.url),
+  );
+  const contract = fileURLToPath(
+    new URL("../src/inventory/contract.ts", import.meta.url),
+  );
+  const bundle = await build({
+    stdin: {
+      contents: `
+    import {requestIntakeWork,advanceIntakeWork,listIntakeWork,selectIntakeRange} from ${JSON.stringify(work)};
+    import {claimJob,acceptResult} from ${JSON.stringify(store)};
+    import {inventoryEpisodeId} from ${JSON.stringify(contract)};
+    const uuid = n => '00000000-0000-4000-8000-'+String(n).padStart(12,'0');
+    export default {async fetch(request,{DB}) {
+      const {op,input}=await request.json();
+      const env={DB,INTAKE_WORK_REQUESTS_ENABLED:'true',CAPTURE_JOBS_ENABLED:'true',CUT_REQUESTS_ENABLED:'true',
+        CUT_JOBS_ENABLED:'true',CUT_PLANNING_ENABLED:'false',CAPTURE_JOBS_GRANT_OPERATIONS:'capture,cut',
+        CAPTURE_JOBS_GRANT_SOURCE_ID:'nomad:capture-worker',CAPTURE_JOBS_GRANT_SHOW:'twib',
+        CAPTURE_JOBS_GRANT_SCOPES:'job:claim,job:result',CAPTURE_JOBS_GRANT_EPISODE:'128',
+        CAPTURE_JOBS_GRANT_STARTS_AT:'2026-10-18T00:00:00Z',CAPTURE_JOBS_GRANT_EXPIRES_AT:'2026-10-18T02:00:00Z'};
+      try {
+        if(op==='seed') {
+          const data={id:'manual-range-intake',episodeId:'draft',canonicalUrl:'https://youtu.be/abcdefghijk',revision:1,status:'awaiting_processing',inMs:null,outMs:null,whyItMatters:'Keep original notes'};
+          await DB.prepare("INSERT INTO episode_workspaces(id,data,status,is_active,revision) VALUES('draft',?,'draft',1,1)").bind(JSON.stringify({id:'draft',number:128})).run();
+          await DB.prepare("INSERT INTO manual_intake(id,owner,episode_id,canonical_url,in_ms,out_ms,status,revision,data) VALUES(?,'owner','draft',?,NULL,NULL,'awaiting_processing',1,?)").bind(data.id,data.canonicalUrl,JSON.stringify(data)).run();
+          const w=await requestIntakeWork(env,data.id,{expectedRevision:1,priority:'normal'},'owner',1000);
+          const lease=(await claimJob(DB,{request_id:uuid(1)},1001,{episode:128,intakeEnabled:true})).claim;
+          const proof={version:1,job_id:w.jobId,ref:'new-review/'+w.jobId+'-a1.mp4',sha256:'a'.repeat(64),size_bytes:100,duration_seconds:600,show:'twib',episode:128,editorial_ready:false};
+          await acceptResult(DB,{delivery_id:uuid(2),job_id:w.jobId,lease_id:lease.lease_id,state:'succeeded',attempt:1,code:null,capture:proof},1002);
+          const item={id:'item_'+'b'.repeat(64),kind:'media',media:{ref:proof.ref,present:true,size_bytes:100,modified_at:null,duration_seconds:600},producer_record:{clip_id:'native',clip_uid:'native',source_long_clip_id:null,parent_clip_id:null},capture_evidence:[{artifact:'capture/synthetic.json',matches_observed_size:true,content_hash_verified:false,streams_reprobed:false,producer_sha256:proof.sha256}],observations:[],origins:[],processing_status:'captured',ready:false};
+          const episode=await inventoryEpisodeId(128);
+          await DB.batch([
+            DB.prepare('INSERT INTO inventory_items(source_id,episode_id,item_id) VALUES(?,?,?)').bind('nomad:number-one',episode,item.id),
+            DB.prepare("INSERT INTO inventory_snapshots(receipt_id,source_id,episode_id,digest,scan_id,sequence,envelope_hash,payload_hash,observed_ms,accepted_at,manifest_json,receipt_json) VALUES('receipt',?,?,'d','scan',1,'h','p',1,'2026-10-18T00:00:00Z','{}','{}')").bind('nomad:number-one',episode),
+            DB.prepare('INSERT INTO inventory_observations(receipt_id,source_id,episode_id,item_id,sequence,item_json,observed_ms) VALUES(?,?,?,?,?,?,1)').bind('receipt','nomad:number-one',episode,item.id,1,JSON.stringify(item))
+          ]);
+          await advanceIntakeWork(env,w.jobId);
+          return Response.json((await listIntakeWork(env,'owner')).jobs[0]);
+        }
+        const result=await selectIntakeRange(env,'manual-range-intake',input.jobId,input.selection,'owner',Date.parse('2026-10-18T01:00:00Z'));
+        return Response.json(result);
+      } catch(error) {return Response.json({code:error.code,message:error.message},{status:error.status??500});}
+    }};`,
+      resolveDir: process.cwd(),
+    },
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "neutral",
+  });
+  const local = new Miniflare(
+    convertV4MiniflareOptions({
+      workers: [
+        {
+          name: "manual-range-test",
+          modules: true,
+          script: bundle.outputFiles[0].text,
+          compatibilityDate: "2026-10-01",
+          d1Databases: { DB: "manual-range-test" },
+          outboundService: () => {
+            throw new Error("Network forbidden");
+          },
+        },
+      ],
+    }),
+  );
+  try {
+    const db = await local.getD1Database("DB");
+    const migrations = new URL("../migrations/", import.meta.url);
+    for (const name of readdirSync(migrations)
+      .filter((n) => n.endsWith(".sql"))
+      .sort())
+      for (const sql of statements(
+        readFileSync(new URL(name, migrations), "utf8"),
+      ))
+        await db.prepare(sql).run();
+    const send = (value: unknown) =>
+      local.dispatchFetch("https://offline.test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(value),
+      });
+    const seed = await send({ op: "seed" });
+    expect(seed.status, await seed.clone().text()).toBe(200);
+    const view = (await seed.json()) as {
+      jobId: string;
+      rangeSelection: object;
+    };
+    const input = {
+      jobId: view.jobId,
+      selection: {
+        ...view.rangeSelection,
+        range: { kind: "range", startSeconds: 10, endSeconds: 30 },
+      },
+    };
+    const responses = await Promise.all([
+      send({ op: "select", input }),
+      send({ op: "select", input }),
+    ]);
+    expect(responses.map((r) => r.status)).toEqual([200, 200]);
+    const result = await responses[0].json();
+    expect(await responses[1].json()).toEqual(result);
+    expect(result).toMatchObject({ selectionOrigin: "owner_range" });
+    const conflict = await send({
+      op: "select",
+      input: {
+        ...input,
+        selection: {
+          ...input.selection,
+          range: { kind: "range", startSeconds: 11, endSeconds: 30 },
+        },
+      },
+    });
+    expect(conflict.status).toBe(409);
+    expect(
+      await db.prepare("SELECT count(*) n FROM inventory_cut_requests").first(),
+    ).toEqual({ n: 2 });
+    expect(
+      await db.prepare("SELECT count(*) n FROM capture_jobs").first(),
+    ).toEqual({ n: 2 });
+    expect(
+      await db.prepare("SELECT count(*) n FROM inventory_reviews").first(),
+    ).toEqual({ n: 0 });
+  } finally {
+    await local.dispose();
+  }
+});

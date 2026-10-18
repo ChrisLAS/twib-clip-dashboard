@@ -1,6 +1,7 @@
 import {
   listIntakeWork,
   requestIntakeWork,
+  selectIntakeRange,
   retryIntakeWork,
 } from "./capture-jobs/intake-work";
 import { proposalRange } from "./capture-jobs/plan";
@@ -454,6 +455,25 @@ export default {
           );
         result = json(
           await retryIntakeWork(
+            env,
+            path.split("/")[3],
+            path.split("/")[5],
+            await body(request),
+            owner,
+          ),
+        );
+      } else if (
+        /^\/api\/intake\/[\w-]+\/work\/[0-9a-f-]{36}\/range$/.test(path) &&
+        method === "POST"
+      ) {
+        if (demo)
+          throw new HttpError(
+            403,
+            "OWNER_REQUIRED",
+            "An owner session is required.",
+          );
+        result = json(
+          await selectIntakeRange(
             env,
             path.split("/")[3],
             path.split("/")[5],

@@ -22,6 +22,8 @@ import {
   planningEnabled,
   executionEnabled,
   retryCut,
+  eligibility,
+  authorizationTable,
 } from "./cut";
 import { kindGranted } from "./scope";
 import { retryJob } from "./store";
@@ -197,6 +199,19 @@ export async function workView(env: Env, w: Work): Promise<IntakeWorkView> {
         : j.state === "needs_review" ||
           (j.state === "blocked" && j.code === "PROCESSING_DISABLED")),
     cutRequest: cv,
+    rangeSelection:
+      cut &&
+      cutWireSchema.parse(JSON.parse(cut.request_json)).spec.kind ===
+        "first_pass"
+        ? {
+            expectedCutRequestId: cut.request_id,
+            expectedRequestRevision: await sha256(cut.request_json),
+            expectedParentVersion: cut.parent_version,
+            expectedRevision: w.intake_revision,
+            expectedWorkspaceRevision: w.workspace_revision,
+            episodeNumber: w.episode_number,
+          }
+        : null,
   };
 }
 export async function listIntakeWork(env: Env, owner: string) {
@@ -491,6 +506,15 @@ export async function advanceIntakeWork(env: Env, jobId?: string) {
 }
 async function advanceOne(env: Env, w: Work) {
   if (w.cut_request_id) {
+    // A linked range owns the downstream stage; never re-enqueue its original.
+    if (
+      await env.DB.prepare(
+        "SELECT 1 FROM inventory_cut_requests WHERE source_plan_request_id=?",
+      )
+        .bind(w.cut_request_id)
+        .first()
+    )
+      return;
     const cut = await readCut(env.DB, w.cut_request_id);
     if (cut) {
       const spec = cutWireSchema.parse(JSON.parse(cut.request_json)).spec;
@@ -649,4 +673,199 @@ async function advanceOne(env: Env, w: Work) {
   const linked = await get(env.DB, w.job_id, w.owner);
   if (!linked?.cut_request_id) throw conflict();
   await advanceOne(env, linked);
+}
+
+const rangeSelectionSchema = z
+  .object({
+    expectedRevision: z.number().int().positive(),
+    expectedWorkspaceRevision: z.number().int().positive(),
+    episodeNumber: z.number().int().min(1).max(999999),
+    expectedCutRequestId: z.string().uuid(),
+    expectedRequestRevision: z.string().regex(/^[a-f0-9]{64}$/),
+    expectedParentVersion: z.string().regex(/^[a-f0-9]{64}$/),
+    range: cutSpecSchema.refine((v) => v.kind === "range"),
+  })
+  .strict();
+
+// Owner-only selection of a range from an already captured original. This is
+// processing direction, not a model proposal or editorial approval. Both original
+// work intent and first-pass request stay immutable; the existing unique child
+// link makes competing selections conflict without a new capture or migration.
+export async function selectIntakeRange(
+  env: Env,
+  intakeId: string,
+  jobId: string,
+  value: unknown,
+  owner: string,
+  now = Date.now(),
+) {
+  if (!intakeWorkEnabled(env)) throw unavailable();
+  const input = rangeSelectionSchema.parse(value);
+  const db = env.DB;
+  const w = await get(db, jobId, owner);
+  if (
+    !w ||
+    w.intake_id !== intakeId ||
+    w.intake_revision !== input.expectedRevision ||
+    w.workspace_revision !== input.expectedWorkspaceRevision ||
+    w.episode_number !== input.episodeNumber ||
+    w.cut_request_id !== input.expectedCutRequestId ||
+    !(await current(db, w))
+  )
+    throw conflict();
+  const cut = await readCut(db, input.expectedCutRequestId);
+  if (
+    !cut ||
+    cut.owner !== owner ||
+    cut.review_revision !== 0 ||
+    cut.source_plan_request_id ||
+    cut.parent_version !== input.expectedParentVersion ||
+    (await sha256(cut.request_json)) !== input.expectedRequestRevision ||
+    cut.state !== "needs_review" ||
+    cut.exec_state ||
+    cut.proposal_json ||
+    cut.derivative_json ||
+    cut.transition_code
+  )
+    throw conflict();
+  const original = cutWireSchema.parse(JSON.parse(cut.request_json));
+  if (
+    original.spec.kind !== "first_pass" ||
+    original.intake_work_id !== jobId ||
+    original.episode !== w.episode_number ||
+    original.editorial ||
+    !executableCutParentSchema.safeParse(original.parent).success ||
+    !original.parent.sha256
+  )
+    throw conflict();
+  if (
+    !(await db
+      .prepare(
+        "SELECT 1 FROM capture_jobs WHERE job_id=? AND owner=? AND state='succeeded'",
+      )
+      .bind(jobId, owner)
+      .first())
+  )
+    throw conflict();
+  const { episode, obs, duplicateId } = await eligibility(db, cut, true);
+  const item = JSON.parse(obs.item_json) as InventoryItem;
+  if (
+    !item.media?.present ||
+    item.media.ref !== original.parent.ref ||
+    item.media.size_bytes !== original.parent.size_bytes ||
+    item.media.modified_at !== original.parent.modified_at ||
+    (item.producer_record?.clip_id ?? null) !== original.parent.clip_id ||
+    (item.producer_record?.clip_uid ?? null) !== original.parent.clip_uid ||
+    item.media.duration_seconds === null ||
+    input.range.kind !== "range" ||
+    input.range.endSeconds > item.media.duration_seconds ||
+    !item.capture_evidence?.some(
+      (e) =>
+        e.matches_observed_size && e.producer_sha256 === original.parent.sha256,
+    )
+  )
+    throw conflict();
+  const id = await uuid("intake-owner-range/v1:" + cut.request_id);
+  const request = JSON.stringify(
+    cutWireSchema.parse({ ...original, job_id: id, spec: input.range }),
+  );
+  const result = {
+    requestId: id,
+    sourcePlanRequestId: cut.request_id,
+    selectionOrigin: "owner_range" as const,
+  };
+  const previous = await readCut(db, id);
+  if (previous) {
+    if (
+      previous.owner !== owner ||
+      previous.source_plan_request_id !== cut.request_id ||
+      previous.request_json !== request
+    )
+      throw conflict();
+    return result; // Acknowledging committed intent does not renew an expired grant.
+  }
+  const starts = Date.parse(env.CAPTURE_JOBS_GRANT_STARTS_AT ?? "");
+  const expires = Date.parse(env.CAPTURE_JOBS_GRANT_EXPIRES_AT ?? "");
+  if (
+    !executionEnabled(env) ||
+    env.CAPTURE_JOBS_GRANT_SOURCE_ID !== "nomad:capture-worker" ||
+    env.CAPTURE_JOBS_GRANT_SHOW !== "twib" ||
+    env.CAPTURE_JOBS_GRANT_SCOPES !== "job:claim,job:result" ||
+    env.CAPTURE_JOBS_GRANT_EPISODE !== String(w.episode_number) ||
+    !Number.isFinite(starts) ||
+    !Number.isFinite(expires) ||
+    expires <= starts ||
+    expires - starts > 86400000 ||
+    now < starts ||
+    now >= expires
+  )
+    throw conflict();
+  const guard = `EXISTS(SELECT 1 FROM intake_work_requests w JOIN capture_jobs j ON j.job_id=w.job_id WHERE w.job_id=? AND w.owner=? AND w.cut_request_id=? AND j.state='succeeded' AND ${intakeCurrentSql})
+    AND EXISTS(SELECT 1 FROM inventory_cut_requests c WHERE c.request_id=? AND c.owner=? AND c.request_json=? AND c.state='needs_review' AND c.proposal_json IS NULL AND c.derivative_json IS NULL AND c.transition_code IS NULL AND NOT EXISTS(SELECT 1 FROM capture_jobs j WHERE j.job_id=c.request_id))
+    AND EXISTS(SELECT 1 FROM inventory_observations o WHERE source_id=? AND episode_id=? AND item_id=? AND receipt_id=? AND sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence))
+    AND EXISTS(SELECT 1 FROM ${authorizationTable(cut)} WHERE source_id=? AND episode_id=? AND item_id=? AND revision=0 AND status='cut_down' AND reviewed_version=?)
+    AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`;
+  const bindings = [
+    jobId,
+    owner,
+    cut.request_id,
+    cut.request_id,
+    owner,
+    cut.request_json,
+    INVENTORY_SOURCE,
+    episode,
+    cut.item_id,
+    obs.receipt_id,
+    obs.sequence,
+    INVENTORY_SOURCE,
+    episode,
+    cut.item_id,
+    cut.parent_version,
+    INVENTORY_SOURCE,
+    episode,
+    cut.item_id,
+    duplicateId,
+  ];
+  await db.batch([
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO inventory_cut_requests(request_id,item_id,owner,parent_version,review_revision,request_json,state,source_plan_request_id,created_at,updated_at) SELECT ?,?,?,?,0,?,'queued',?,?,? WHERE ${guard}`,
+      )
+      .bind(
+        id,
+        cut.item_id,
+        owner,
+        cut.parent_version,
+        request,
+        cut.request_id,
+        now,
+        now,
+        ...bindings,
+      ),
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO capture_jobs(job_id,request_json,owner,state,operation,created_at,updated_at) SELECT ?,?,?,'queued','capture',?,? WHERE EXISTS(SELECT 1 FROM inventory_cut_requests WHERE request_id=? AND source_plan_request_id=? AND request_json=? AND owner=?) AND ${guard}`,
+      )
+      .bind(
+        id,
+        request,
+        owner,
+        now,
+        now,
+        id,
+        cut.request_id,
+        request,
+        owner,
+        ...bindings,
+      ),
+  ]);
+  const saved = await readCut(db, id);
+  if (
+    !saved ||
+    saved.source_plan_request_id !== cut.request_id ||
+    saved.request_json !== request ||
+    saved.exec_state !== "queued"
+  )
+    throw conflict();
+  return result;
 }

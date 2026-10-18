@@ -4,6 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import type { Env } from "../src/env";
 import {
   requestIntakeWork,
+  selectIntakeRange,
   listIntakeWork,
   retryIntakeWork,
   advanceIntakeWork,
@@ -872,4 +873,272 @@ it("reconciles an earlier uncertain retry after target advances and dispatch is 
   expect(
     raw.prepare("SELECT count(*) n FROM capture_job_retries").get()?.n,
   ).toBe(0);
+});
+
+async function manualRangeFixture() {
+  const { a, proof } = await captured();
+  await observe(proof);
+  await advanceIntakeWork(env, a.jobId);
+  env.CUT_JOBS_ENABLED = "true";
+  env.CUT_PLANNING_ENABLED = "false";
+  env.CAPTURE_JOBS_GRANT_OPERATIONS = "capture,cut";
+  env.CAPTURE_JOBS_GRANT_SOURCE_ID = "nomad:capture-worker";
+  env.CAPTURE_JOBS_GRANT_SHOW = "twib";
+  env.CAPTURE_JOBS_GRANT_SCOPES = "job:claim,job:result";
+  env.CAPTURE_JOBS_GRANT_STARTS_AT = new Date(1000).toISOString();
+  env.CAPTURE_JOBS_GRANT_EXPIRES_AT = new Date(7201000).toISOString();
+  const view = (await listIntakeWork(env, "owner")).jobs[0];
+  const input = {
+    ...view.rangeSelection!,
+    range: { kind: "range" as const, startSeconds: 10, endSeconds: 30 },
+  };
+  const select = (value: unknown = input, owner = "owner", now = 2000) =>
+    selectIntakeRange(env, "intake-1", a.jobId, value, owner, now);
+  return { a, proof, view, input, select };
+}
+it("owner range reuses captured128 with planning off, immutable history, linked tracking and no recapture", async () => {
+  const f = await manualRangeFixture();
+  const before = JSON.stringify(
+    raw.prepare("SELECT * FROM intake_work_requests").all(),
+  );
+  const intakeBefore = JSON.stringify(
+    raw.prepare("SELECT * FROM manual_intake").all(),
+  );
+  const parentBefore = JSON.stringify(
+    await readCut(db, f.input.expectedCutRequestId),
+  );
+  const result = await f.select();
+  expect(result.selectionOrigin).toBe("owner_range");
+  expect(await f.select()).toEqual(result);
+  // Acknowledgement of the same committed choice survives grant expiry.
+  expect(await f.select(f.input, "owner", 7201000)).toEqual(result);
+  expect(
+    JSON.stringify(raw.prepare("SELECT * FROM intake_work_requests").all()),
+  ).toBe(before);
+  expect(JSON.stringify(raw.prepare("SELECT * FROM manual_intake").all())).toBe(
+    intakeBefore,
+  );
+  expect(JSON.stringify(await readCut(db, f.input.expectedCutRequestId))).toBe(
+    parentBefore,
+  );
+  expect(raw.prepare("SELECT count(*) n FROM inventory_reviews").get()?.n).toBe(
+    0,
+  );
+  const view = (await listIntakeWork(env, "owner")).jobs[0];
+  expect(view.cutRequest?.requestId).toBe(result.requestId);
+  expect(view.cutRequest?.selectionOrigin).toBe("owner_range");
+  expect(view.stage).toBe("queued");
+  const child = await readCut(db, result.requestId);
+  const wire = JSON.parse(child!.request_json);
+  expect(wire.intake_work_id).toBe(f.a.jobId);
+  expect(wire.editorial).toBeUndefined();
+  expect(child?.proposal_json).toBeNull();
+  expect(child?.review_revision).toBe(0);
+  expect(wire.parent).toEqual(
+    JSON.parse((await readCut(db, f.input.expectedCutRequestId))!.request_json)
+      .parent,
+  );
+  const claimed = await claimJob(
+    db,
+    { request_id: id(100), job_kind: "cut" },
+    3000,
+    scope,
+  );
+  expect(claimed.claim?.job_id).toBe(result.requestId);
+  expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(2);
+  expect(
+    raw.prepare("SELECT state FROM capture_jobs WHERE job_id=?").get(f.a.jobId)
+      ?.state,
+  ).toBe("succeeded");
+  env.CUT_PLANNING_ENABLED = "true";
+  env.CAPTURE_JOBS_GRANT_OPERATIONS = "capture,cut,plan";
+  await advanceIntakeWork(env, f.a.jobId);
+  await expect(
+    enqueueCut(db, f.input.expectedCutRequestId, "owner", 4000, true),
+  ).rejects.toMatchObject({ status: 409 });
+  expect(
+    raw
+      .prepare("SELECT count(*) n FROM capture_jobs WHERE job_id=?")
+      .get(f.input.expectedCutRequestId)?.n,
+  ).toBe(0);
+});
+it("owner range conflicts on a changed choice and cannot replay across owners or superseded intent", async () => {
+  const f = await manualRangeFixture();
+  await f.select();
+  await expect(
+    f.select({
+      ...f.input,
+      range: { kind: "range", startSeconds: 11, endSeconds: 30 },
+    }),
+  ).rejects.toMatchObject({ status: 409 });
+  await expect(f.select(f.input, "other-owner")).rejects.toMatchObject({
+    status: 409,
+  });
+  edit();
+  await expect(f.select()).rejects.toMatchObject({ status: 409 });
+  expect(
+    raw.prepare("SELECT count(*) n FROM inventory_cut_requests").get()?.n,
+  ).toBe(2);
+});
+it.each([
+  { expectedRevision: 2 },
+  { expectedWorkspaceRevision: 2 },
+  { episodeNumber: 127 },
+  { expectedParentVersion: "c".repeat(64) },
+  { expectedRequestRevision: "c".repeat(64) },
+  { expectedCutRequestId: id(999) },
+])("owner range rejects stale/wrong binding %j", async (change) => {
+  const f = await manualRangeFixture();
+  await expect(f.select({ ...f.input, ...change })).rejects.toMatchObject({
+    status: 409,
+  });
+  expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(1);
+});
+it.each([
+  { kind: "range", startSeconds: -1, endSeconds: 10 },
+  { kind: "range", startSeconds: 10, endSeconds: 10 },
+  { kind: "range", startSeconds: 0, endSeconds: 181 },
+  { kind: "range", startSeconds: 0.0001, endSeconds: 10 },
+  { kind: "range", startSeconds: 599, endSeconds: 601 },
+  { kind: "first_pass" },
+])("owner range rejects invalid/out-of-source range %j", async (range) => {
+  const f = await manualRangeFixture();
+  await expect(f.select({ ...f.input, range })).rejects.toBeDefined();
+  expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(1);
+});
+it.each([
+  { CUT_JOBS_ENABLED: "false" },
+  { CUT_REQUESTS_ENABLED: "false" },
+  { CAPTURE_JOBS_ENABLED: "false" },
+  { CAPTURE_JOBS_GRANT_OPERATIONS: "capture" },
+  { CAPTURE_JOBS_GRANT_EPISODE: "127" },
+  { CAPTURE_JOBS_GRANT_SOURCE_ID: "other" },
+  { CAPTURE_JOBS_GRANT_SHOW: "other" },
+  { CAPTURE_JOBS_GRANT_SCOPES: "job:claim" },
+  { CAPTURE_JOBS_GRANT_STARTS_AT: new Date(3000).toISOString() },
+  { CAPTURE_JOBS_GRANT_EXPIRES_AT: new Date(2000).toISOString() },
+  { CAPTURE_JOBS_GRANT_EXPIRES_AT: undefined },
+  { CAPTURE_JOBS_GRANT_EXPIRES_AT: new Date(86401001).toISOString() },
+])("new owner range fails closed for grant/gate %j", async (change) => {
+  const f = await manualRangeFixture();
+  Object.assign(env, change);
+  await expect(f.select()).rejects.toMatchObject({ status: 409 });
+  expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(1);
+});
+it.each([
+  "UPDATE manual_intake SET revision=2,data=json_set(data,'$.revision',2)",
+  "UPDATE manual_intake SET status='cancelled',data=json_set(data,'$.status','cancelled')",
+  "UPDATE episode_workspaces SET is_active=0",
+  "UPDATE episode_workspaces SET data=json_set(data,'$.number',127)",
+  "UPDATE inventory_observations SET item_json=json_set(item_json,'$.media.size_bytes',101)",
+  "UPDATE inventory_observations SET item_json=json_set(item_json,'$.media.ref','new-review/other.mp4')",
+  "UPDATE inventory_observations SET item_json=json_set(item_json,'$.producer_record.clip_id','other')",
+  "UPDATE inventory_observations SET item_json=json_set(item_json,'$.capture_evidence[0].matches_observed_size',json('false'))",
+])("owner range rejects superseded or changed source %s", async (sql) => {
+  const f = await manualRangeFixture();
+  raw.exec(sql);
+  await expect(f.select()).rejects.toMatchObject({ status: 409 });
+  expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(1);
+});
+it("owner range never competes with already queued planning", async () => {
+  const f = await manualRangeFixture();
+  await enqueueCut(db, f.input.expectedCutRequestId, "owner", 1000, true);
+  await expect(f.select()).rejects.toMatchObject({ status: 409 });
+  expect(
+    raw.prepare("SELECT count(*) n FROM inventory_cut_requests").get()?.n,
+  ).toBe(1);
+});
+it("owner range atomic guard rejects an intake edit between validation and commit", async () => {
+  const f = await manualRangeFixture();
+  const batch = db.batch;
+  db.batch = ((statements: D1PreparedStatement[]) => {
+    edit();
+    return batch(statements);
+  }) as typeof db.batch;
+  await expect(f.select()).rejects.toMatchObject({ status: 409 });
+  expect(
+    raw.prepare("SELECT count(*) n FROM inventory_cut_requests").get()?.n,
+  ).toBe(1);
+});
+it("owner range transaction failure retains original and commits no child or queued job", async () => {
+  const f = await manualRangeFixture();
+  const batch = db.batch;
+  db.batch = ((statements: D1PreparedStatement[]) =>
+    batch([
+      ...statements,
+      new Statement("SELECT missing_column") as unknown as D1PreparedStatement,
+    ])) as typeof db.batch;
+  await expect(f.select()).rejects.toBeDefined();
+  expect(
+    raw.prepare("SELECT count(*) n FROM inventory_cut_requests").get()?.n,
+  ).toBe(1);
+  expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(1);
+});
+it("simultaneous identical owner choices create one child; competing choices conflict", async () => {
+  const f = await manualRangeFixture();
+  const batch = db.batch;
+  let pending: Promise<unknown> = Promise.resolve();
+  db.batch = ((statements: D1PreparedStatement[]) => {
+    const next = pending.then(() => batch(statements));
+    pending = next.catch(() => undefined);
+    return next;
+  }) as typeof db.batch;
+  const results = await Promise.all([f.select(), f.select()]);
+  expect(results[0]).toEqual(results[1]);
+  const choices = await Promise.allSettled([
+    f.select(),
+    f.select({
+      ...f.input,
+      range: { kind: "range", startSeconds: 20, endSeconds: 40 },
+    }),
+  ]);
+  expect(choices.map((v) => v.status)).toEqual(["fulfilled", "rejected"]);
+  expect(
+    raw.prepare("SELECT count(*) n FROM inventory_cut_requests").get()?.n,
+  ).toBe(2);
+  expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(2);
+});
+it("linked owner selection fences a previously validated original enqueue at transaction time", async () => {
+  const f = await manualRangeFixture();
+  const batch = db.batch;
+  let first = true;
+  db.batch = (async (statements: D1PreparedStatement[]) => {
+    if (first) {
+      first = false;
+      await f.select();
+    }
+    return batch(statements);
+  }) as typeof db.batch;
+  await expect(
+    enqueueCut(db, f.input.expectedCutRequestId, "owner", 2000, true),
+  ).rejects.toMatchObject({ status: 409 });
+  expect(
+    raw
+      .prepare("SELECT count(*) n FROM capture_jobs WHERE job_id=?")
+      .get(f.input.expectedCutRequestId)?.n,
+  ).toBe(0);
+  expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(2);
+});
+it("simultaneous distinct first choices cannot both commit", async () => {
+  const f = await manualRangeFixture();
+  const batch = db.batch;
+  let pending: Promise<unknown> = Promise.resolve();
+  db.batch = ((statements: D1PreparedStatement[]) => {
+    const next = pending.then(() => batch(statements));
+    pending = next.catch(() => undefined);
+    return next;
+  }) as typeof db.batch;
+  const choices = await Promise.allSettled([
+    f.select(),
+    f.select({
+      ...f.input,
+      range: { kind: "range", startSeconds: 20, endSeconds: 40 },
+    }),
+  ]);
+  expect(choices.filter((v) => v.status === "fulfilled")).toHaveLength(1);
+  expect(choices.filter((v) => v.status === "rejected")).toHaveLength(1);
+  expect(
+    raw.prepare("SELECT count(*) n FROM inventory_cut_requests").get()?.n,
+  ).toBe(2);
+  expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(2);
 });

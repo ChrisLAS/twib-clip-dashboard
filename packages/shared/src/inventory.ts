@@ -30,6 +30,7 @@ export interface InventoryProducerRecord {
 export interface InventoryCutRequest {
   requestId: string;
   sourcePlanRequestId?: string | null;
+  selectionOrigin?: "owner_range" | "model_proposal" | null;
   transitionCode?: string | null;
   parentItemId: string;
   parentVersion: string;
