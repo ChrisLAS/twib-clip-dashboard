@@ -37,10 +37,17 @@ export function parseCutTime(value: string): number | undefined {
 }
 export function batchPayload(
   record: InventoryReadItem,
+  episodeNumber: number,
   batchGuidance: string,
   instruction: BatchInstructions,
   operationId: string,
 ): InventoryReviewInput {
+  if (
+    !Number.isInteger(episodeNumber) ||
+    episodeNumber < 1 ||
+    episodeNumber > 999999
+  )
+    throw new Error("Choose an exact episode number.");
   if (batchSizeIssue(record)) throw new Error(batchSizeIssue(record)!);
   if (!batchEligible(record) || !record.review)
     throw new Error(
@@ -74,7 +81,7 @@ export function batchPayload(
     throw new Error("The start time must be within the source.");
   return {
     operationId,
-    episodeNumber: 127,
+    episodeNumber,
     itemId: record.id,
     expectedRevision: record.review.revision,
     expectedVersion: record.review.version,

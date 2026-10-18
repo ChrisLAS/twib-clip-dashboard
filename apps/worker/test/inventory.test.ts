@@ -940,7 +940,7 @@ describe("owner inventory read model", () => {
       expect(prepare).not.toHaveBeenCalled();
     },
   );
-  it("derives only the registered pilot's exact inventory identity", async () => {
+  it("derives exact inventory identities for selected workspace numbers", async () => {
     expect(
       await inventoryEpisodeSelection(new URLSearchParams("episodeNumber=127")),
     ).toEqual({ episodeId: example.episode.id, episodeNumber: 127 });
@@ -949,12 +949,9 @@ describe("owner inventory read model", () => {
         new URLSearchParams({ episodeId: example.episode.id }),
       ),
     ).toEqual({ episodeId: example.episode.id, episodeNumber: null });
-    await expect(
-      inventoryEpisodeSelection(new URLSearchParams("episodeNumber=128")),
-    ).rejects.toMatchObject({
-      status: 404,
-      code: "INVENTORY_EPISODE_UNMAPPED",
-    });
+    expect(
+      await inventoryEpisodeSelection(new URLSearchParams("episodeNumber=128")),
+    ).toEqual({ episodeId: await inventoryEpisodeId(128), episodeNumber: 128 });
     await expect(
       inventoryEpisodeSelection(
         new URLSearchParams({
@@ -1024,7 +1021,14 @@ describe("owner inventory read model", () => {
       new Request("http://localhost/api/inventory?episodeNumber=128"),
       env,
     );
-    expect(unmapped.status).toBe(404);
+    expect(unmapped.status).toBe(200);
+    expect(await unmapped.json()).toMatchObject({
+      episodeNumber: 128,
+      episodeId: await inventoryEpisodeId(128),
+      items: [],
+      summary: { totalItems: 0 },
+      ingestion: "disabled",
+    });
   });
 });
 describe("HTTP fail-closed boundary", () => {

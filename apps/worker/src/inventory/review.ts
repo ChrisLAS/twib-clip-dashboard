@@ -13,7 +13,7 @@ const statuses = ["unreviewed", "approved", "rejected", "cut_down"] as const;
 const schema = z
   .object({
     operationId: z.string().uuid(),
-    episodeNumber: z.literal(127),
+    episodeNumber: z.number().int().min(1).max(999999),
     itemId: z.string().regex(/^item_[a-f0-9]{64}$/),
     expectedRevision: z
       .number()

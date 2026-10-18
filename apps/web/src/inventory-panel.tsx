@@ -46,6 +46,7 @@ import {
 type RecordItem = InventoryResponse["items"][number];
 function InventoryRecord({
   record,
+  episodeNumber,
   cutRequestsEnabled,
   onPlay,
   onFile,
@@ -62,6 +63,7 @@ function InventoryRecord({
   onFindDerivative,
 }: {
   record: RecordItem;
+  episodeNumber: number;
   cutRequestsEnabled?: boolean;
   onPlay: () => void;
   onFile: (file: File, confirmedRef: string) => void;
@@ -300,6 +302,7 @@ function InventoryRecord({
             />
           )}
           <InventoryReviewEditor
+            episodeNumber={episodeNumber}
             record={record}
             cutRequestsEnabled={cutRequestsEnabled}
             onFindDerivative={onFindDerivative}
@@ -320,12 +323,42 @@ function InventoryRecord({
     </details>
   );
 }
-export function InventoryPanel({
+type InventoryPanelProps = {
+  active: boolean;
+  owner?: string;
+  csrfToken?: string;
+  episodeNumber: number | null;
+};
+
+// Remount all transient playback, requests, pagination and drafts on scope change.
+// Durable outboxes remain under their original owner/source/episode keys.
+export function InventoryPanel(props: InventoryPanelProps) {
+  const number = props.episodeNumber;
+  if (
+    number === null ||
+    !Number.isInteger(number) ||
+    number < 1 ||
+    number > 999999
+  )
+    return props.active ? (
+      <p role="status">Choose an episode workspace to view its inventory.</p>
+    ) : null;
+  return (
+    <ScopedInventoryPanel
+      key={JSON.stringify([props.owner, number])}
+      {...props}
+      episodeNumber={number}
+    />
+  );
+}
+function ScopedInventoryPanel({
   owner,
   active,
   csrfToken,
+  episodeNumber,
 }: {
   active: boolean;
+  episodeNumber: number;
   owner?: string;
   csrfToken?: string;
 }) {
@@ -396,7 +429,7 @@ export function InventoryPanel({
     if (!data) return;
     const match = file
       ? matchExplicitFile(record, file, confirmedRef ?? "")
-      : matchEpisodeFile(record, files, data.episodeNumber ?? 127);
+      : matchEpisodeFile(record, files, episodeNumber);
     if (match.state !== "matched") {
       setSelectionError(
         "The selected file does not uniquely match the exact reference and observed size. No playback was opened.",
@@ -423,7 +456,7 @@ export function InventoryPanel({
     api
       .inventory(
         {
-          episodeNumber: 127,
+          episodeNumber,
           group,
           status,
           query,
@@ -437,8 +470,11 @@ export function InventoryPanel({
         controller.signal,
       )
       .then((result) => {
-        if (!controller.signal.aborted && version === epoch.current)
+        if (!controller.signal.aborted && version === epoch.current) {
+          if (result.episodeNumber !== episodeNumber)
+            throw new Error("Inventory episode mismatch");
           setData(result);
+        }
       })
       .catch(() => {
         if (!controller.signal.aborted && version === epoch.current)
@@ -452,6 +488,7 @@ export function InventoryPanel({
       });
     return () => controller.abort();
   }, [
+    episodeNumber,
     active,
     group,
     status,
@@ -496,7 +533,9 @@ export function InventoryPanel({
           <h1 id="inventory-title">
             Reported by Number One<span className="heading-dot">.</span>
           </h1>
-          <p className="subtitle">Nomad · TWiB 127 inventory report</p>
+          <p className="subtitle">
+            Nomad · TWiB {episodeNumber} inventory report
+          </p>
         </div>
         <span className="inventory-readonly">
           <ShieldCheck size={15} />
@@ -505,8 +544,10 @@ export function InventoryPanel({
       </div>
       <div className="inventory-scope">
         <label htmlFor="inventory-episode">Inventory episode</label>
-        <select id="inventory-episode" value="127" onChange={() => {}}>
-          <option value="127">TWiB 127 · registered pilot</option>
+        <select id="inventory-episode" value={episodeNumber} disabled>
+          <option value={episodeNumber}>
+            TWiB {episodeNumber} · selected workspace
+          </option>
         </select>
         <span className="inventory-source">
           Reporter <code>nomad:number-one</code>
@@ -548,7 +589,7 @@ export function InventoryPanel({
       )}
       <div className="inventory-local-picker">
         <label>
-          Choose synced episode 127 folder
+          Choose synced episode {episodeNumber} folder
           <input
             ref={folderInput}
             type="file"
@@ -561,9 +602,9 @@ export function InventoryPanel({
           />
         </label>
         <p>
-          Choose the folder named <code>127</code>, not its parent. Firefox and
-          Chrome grant access only after your selection. Nothing is uploaded;
-          reload requires selecting again.
+          Choose the folder named <code>{episodeNumber}</code>, not its parent.
+          Firefox and Chrome grant access only after your selection. Nothing is
+          uploaded; reload requires selecting again.
         </p>
         {!!files.length && (
           <p role="status">
@@ -875,6 +916,7 @@ export function InventoryPanel({
               owner: owner ?? "",
               source: data.sourceId,
               episode: data.episodeId,
+              episodeNumber,
             }}
             items={loading ? [] : data.items}
             csrfToken={loading ? undefined : csrfToken}
@@ -942,6 +984,7 @@ export function InventoryPanel({
                     </h2>
                   ) : null,
                   <InventoryRecord
+                    episodeNumber={episodeNumber}
                     key={key}
                     record={item}
                     cutRequestsEnabled={data.cutRequestsEnabled}
@@ -1028,8 +1071,7 @@ export function InventoryPanel({
                     }}
                     onRefresh={() => setRevision((old) => old + 1)}
                     localMatch={
-                      matchEpisodeFile(item, files, data.episodeNumber ?? 127)
-                        .state
+                      matchEpisodeFile(item, files, episodeNumber).state
                     }
                     onPlay={() => choose(item)}
                     onFile={(file, ref) => choose(item, file, ref)}

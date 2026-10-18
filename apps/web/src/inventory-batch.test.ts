@@ -13,6 +13,7 @@ describe("batch cutdown preparation", () => {
   it("uses first-pass mode without requiring instructions or inventing episode context", () => {
     const result = batchPayload(
       record,
+      127,
       "",
       { guidance: "", start: "", end: "" },
       "operation",
@@ -26,6 +27,7 @@ describe("batch cutdown preparation", () => {
   it("combines optional batch and specific guidance and preserves a start hint", () => {
     const result = batchPayload(
       record,
+      127,
       "Focus on rates",
       { guidance: "Keep the caveat", start: "1:02.500", end: "" },
       "operation",
@@ -40,6 +42,7 @@ describe("batch cutdown preparation", () => {
     expect(
       batchPayload(
         record,
+        127,
         "",
         { guidance: "", start: "2:00", end: "4:00" },
         "operation",
@@ -53,7 +56,7 @@ describe("batch cutdown preparation", () => {
       ["600", ""],
     ]) {
       expect(() =>
-        batchPayload(record, "", { guidance: "", start, end }, "op"),
+        batchPayload(record, 127, "", { guidance: "", start, end }, "op"),
       ).toThrow();
     }
     for (const time of ["-1", "1:99", "abc", "NaN", "1.0001", "24:00:01"])
@@ -76,6 +79,7 @@ describe("batch cutdown preparation", () => {
     expect(() =>
       batchPayload(
         record,
+        127,
         "a".repeat(1500),
         { guidance: "b".repeat(1500), start: "", end: "" },
         "operation",
@@ -91,9 +95,27 @@ it("blocks oversized sources with an actionable 512 MiB reason", () => {
   expect(() =>
     batchPayload(
       oversized,
+      127,
       "",
       { guidance: "", start: "", end: "" },
       "operation",
     ),
   ).toThrow("512 MiB");
+});
+
+it("binds batch payloads to the explicitly selected episode", () => {
+  expect(
+    batchPayload(record, 128, "", { guidance: "", start: "", end: "" }, "op")
+      .episodeNumber,
+  ).toBe(128);
+  for (const invalid of [0, -1, 1.5, NaN, 1000000])
+    expect(() =>
+      batchPayload(
+        record,
+        invalid,
+        "",
+        { guidance: "", start: "", end: "" },
+        "op",
+      ),
+    ).toThrow("exact episode");
 });

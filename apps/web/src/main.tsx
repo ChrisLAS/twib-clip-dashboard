@@ -684,7 +684,7 @@ function App() {
             </button>
           </nav>
         )}
-        {!clip && workspaceView !== "inventory" && episodes.length > 0 && (
+        {!clip && episodes.length > 0 && (
           <div className="workspace-picker">
             <label htmlFor="episode-picker">Episode</label>
             <select
@@ -726,6 +726,9 @@ function App() {
           </div>
         )}
         <InventoryPanel
+          episodeNumber={
+            episodes.find((item) => item.id === episodeId)?.number ?? null
+          }
           key={session?.owner ?? "unavailable"}
           owner={session?.owner}
           csrfToken={session?.csrfToken}

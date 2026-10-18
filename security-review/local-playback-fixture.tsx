@@ -149,7 +149,7 @@ async function refresh() {
 function Fixture() {
   const [active, setActive] = useState(true);
   test.toggle = () => setActive((value) => !value);
-  return <InventoryPanel active={active} />;
+  return <InventoryPanel episodeNumber={127} active={active} />;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);
 void (async () => {

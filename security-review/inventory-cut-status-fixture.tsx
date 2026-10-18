@@ -137,7 +137,12 @@ function Fixture() {
             },
           ] as InventoryReadItem[]
         }
-        scope={{ owner: "fixture-owner", source: "source", episode: "episode" }}
+        scope={{
+          episodeNumber: 127,
+          owner: "fixture-owner",
+          source: "source",
+          episode: "episode",
+        }}
         blockedIds={[]}
         csrfToken="fixture"
         planningEnabled={gate}

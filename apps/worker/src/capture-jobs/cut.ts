@@ -381,14 +381,18 @@ export async function retryCut(
     .run();
   return cutView((await readCut(db, id))!);
 }
-export async function attachCuts(db: D1Database, items: { id: string }[]) {
-  if (!items.length) return [];
+export async function attachCuts(
+  db: D1Database,
+  items: { id: string }[],
+  episodeNumber: number | null,
+) {
+  if (!items.length || episodeNumber === null) return [];
   return (
     await db
       .prepare(
-        `SELECT c.*,j.state exec_state,j.code exec_code FROM inventory_cut_requests c LEFT JOIN capture_jobs j ON j.job_id=c.request_id WHERE c.item_id IN (${items.map(() => "?").join(",")}) ORDER BY c.created_at DESC,c.request_id LIMIT 100`,
+        `SELECT c.*,j.state exec_state,j.code exec_code FROM inventory_cut_requests c LEFT JOIN capture_jobs j ON j.job_id=c.request_id WHERE json_extract(c.request_json,'$.show')='twib' AND json_extract(c.request_json,'$.episode')=? AND c.item_id IN (${items.map(() => "?").join(",")}) ORDER BY c.created_at DESC,c.request_id LIMIT 100`,
       )
-      .bind(...items.map((i) => i.id))
+      .bind(episodeNumber, ...items.map((i) => i.id))
       .all<Row>()
   ).results.map(cutView);
 }

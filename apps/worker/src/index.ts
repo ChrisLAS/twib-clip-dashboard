@@ -259,7 +259,11 @@ export default {
           },
         );
         if (cutsEnabled(env) && !demo) {
-          const cuts = await attachCuts(env.DB, inventory.items);
+          const cuts = await attachCuts(
+            env.DB,
+            inventory.items,
+            inventory.episodeNumber,
+          );
           for (const item of inventory.items)
             item.cutRequests = cuts.filter((c) => c.parentItemId === item.id);
         }

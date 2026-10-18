@@ -211,7 +211,7 @@ export async function runInventoryBrowserRegression({
       body = {
         sourceId: "nomad:number-one",
         episodeId: receipt.episode_id,
-        episodeNumber: 127,
+        episodeNumber: fixtureEpisode.number,
         candidateCoverage: "partial",
         ingestion: "disabled",
         ingestionPaused: true,

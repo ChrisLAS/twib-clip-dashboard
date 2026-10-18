@@ -8,7 +8,12 @@ import {
   writeOutbox,
 } from "./inventory-batch-outbox";
 import type { InventoryReviewInput } from "@twib/shared";
-const scope = { owner: "owner-a", source: "source", episode: "episode" };
+const scope = {
+  episodeNumber: 127,
+  owner: "owner-a",
+  source: "source",
+  episode: "episode",
+};
 const payload: InventoryReviewInput = {
   operationId: "00000000-0000-4000-8000-000000000001",
   episodeNumber: 127,
@@ -149,4 +154,28 @@ describe("durable batch outbox", () => {
       "clip-on-other-page",
     ]);
   });
+});
+
+it("preserves historical 127 outboxes and rejects mismatched 128 payload scope", () => {
+  const s = storage();
+  const historical = newOutbox(scope, [payload]);
+  writeOutbox(s, scope, historical);
+  expect(JSON.parse(s.getItem(outboxKey(scope))!)).not.toHaveProperty(
+    "episodeNumber",
+  );
+  const next = { ...scope, episode: "episode128", episodeNumber: 128 };
+  const nextPayload = { ...payload, episodeNumber: 128 };
+  expect(readOutbox(s, next)).toBeNull();
+  expect(() => newOutbox(next, [payload])).toThrow("another episode");
+  const box = newOutbox(next, [nextPayload]);
+  writeOutbox(s, next, box);
+  expect(readOutbox(s, scope)).toEqual(historical);
+  expect(readOutbox(s, next)?.entries[0].payload).toEqual(nextPayload);
+  const corrupt = { ...box, entries: historical.entries };
+  expect(() => writeOutbox(s, next, corrupt)).toThrow("scope");
+  s.setItem(outboxKey(next), JSON.stringify(corrupt));
+  expect(() => readOutbox(s, next)).toThrow("scope");
+  expect(readOutbox(s, scope)?.entries[0].payload.operationId).toBe(
+    payload.operationId,
+  );
 });

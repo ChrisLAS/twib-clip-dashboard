@@ -189,6 +189,7 @@ export function InventoryBatchPanel({
           ...entry,
           payload: batchPayload(
             entry.record,
+            scope.episodeNumber,
             guidance,
             entry.instructions,
             crypto.randomUUID(),

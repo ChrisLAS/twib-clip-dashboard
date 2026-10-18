@@ -24,7 +24,7 @@ const spec = z.discriminatedUnion("kind", [
 const payloadSchema = z
   .object({
     operationId: z.string().uuid(),
-    episodeNumber: z.literal(127),
+    episodeNumber: z.number().int().min(1).max(999999),
     itemId: z.string().regex(/^item_[a-f0-9]{64}$/),
     expectedRevision: z.number().int().nonnegative(),
     expectedVersion: z.string().regex(/^[a-f0-9]{64}$/),
@@ -71,7 +71,9 @@ const schema = z
         v.entries.length,
   );
 export type BatchOutbox = z.infer<typeof schema>;
-export type BatchScope = Pick<BatchOutbox, "owner" | "source" | "episode">;
+export type BatchScope = Pick<BatchOutbox, "owner" | "source" | "episode"> & {
+  episodeNumber: number;
+};
 export function outboxKey(scope: BatchScope) {
   return (
     "twib.batch-outbox.v1:" +
@@ -94,7 +96,10 @@ export function readOutbox(
   if (
     box.owner !== scope.owner ||
     box.source !== scope.source ||
-    box.episode !== scope.episode
+    box.episode !== scope.episode ||
+    box.entries.some(
+      (entry) => entry.payload.episodeNumber !== scope.episodeNumber,
+    )
   )
     throw new Error("Stored batch owner or inventory scope does not match.");
   return box;
@@ -108,7 +113,10 @@ export function writeOutbox(
   if (
     value.owner !== scope.owner ||
     value.source !== scope.source ||
-    value.episode !== scope.episode
+    value.episode !== scope.episode ||
+    value.entries.some(
+      (entry) => entry.payload.episodeNumber !== scope.episodeNumber,
+    )
   )
     throw new Error("Cannot persist a batch for another owner or scope.");
   const prior = readOutbox(storage, scope);
@@ -134,9 +142,13 @@ export function newOutbox(
   scope: BatchScope,
   payloads: InventoryReviewInput[],
 ): BatchOutbox {
+  if (payloads.some((payload) => payload.episodeNumber !== scope.episodeNumber))
+    throw new Error("Cannot prepare a batch for another episode.");
   return schema.parse({
     schema: 1,
-    ...scope,
+    owner: scope.owner,
+    source: scope.source,
+    episode: scope.episode,
     entries: payloads.map((payload) => ({
       payload,
       status: "pending",

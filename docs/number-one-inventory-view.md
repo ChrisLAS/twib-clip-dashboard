@@ -1,10 +1,11 @@
 # Owner inventory workspace
 
-The **Source inventory** entry opens a read-only workspace at `?view=inventory`.
-It is separate from the curated episode slate, playback and editorial decisions.
-The pilot inventory scope is explicitly registered as `nomad:number-one / twib /
-127`; its selector is independent from the currently selected curated episode.
-There is no heuristic mapping by filename, URL or current dashboard episode.
+The **Source inventory** entry opens the owner inventory workspace at `?view=inventory`.
+The existing episode picker selects the exact TWiB episode number; its initial
+choice follows the existing active workspace selection. Inventory identities
+remain separate from curated slate IDs: the server derives the deterministic
+`nomad:number-one / twib / number` identity. No filename/URL matching, Drive
+catalog expansion, or machine grant change is involved.
 
 ## What the page establishes
 
@@ -29,8 +30,9 @@ There is no heuristic mapping by filename, URL or current dashboard episode.
 
 Owner authentication precedes `GET /api/inventory` reads. New optional parameters:
 
-- `episodeNumber=127`: explicit registered pilot scope; other numbers return
-  `INVENTORY_EPISODE_UNMAPPED`. Existing exact `episodeId` remains compatible.
+- `episodeNumber`: canonical positive integer 1–999999. An episode without
+  observations returns an empty result, never another episode's records. Existing
+  exact `episodeId` remains compatible; conflicting ID/number pairs are rejected.
 - `status`: one of the shared `INVENTORY_STATUSES` values.
 - `q`: up to 200 characters, literal substring over record IDs and relative
   media/observation/evidence artifact references. It never searches editorial
@@ -91,3 +93,23 @@ There is no pretend retry control, producer write or new credential permission.
 A future retry workflow needs a separately reviewed job contract, exact source
 identity, owner authorization, durable request/acknowledgement and producer
 results before the UI can truthfully offer that action.
+
+## Episode isolation
+
+Owner reviews and cut requests carry the selected episode number and remain
+bound to exact source/episode/item observations, revision, and version. Cut
+status attachment also filters the stored request episode, including when item
+IDs coincide. Owner authentication, CSRF, and separately configured machine
+grants and execution gates are unchanged.
+
+Switching episode or owner aborts old reads and resets transient local files,
+playback, pagination, and unsaved review drafts. A response for another number
+is rejected. Saved reviews are unaffected. Batch outboxes retain their existing
+v1 owner/source/episode storage keys and immutable operation IDs, including
+historical 127 entries; each payload must match the selected episode number.
+No workspace selection means no inventory fetch or review controls.
+
+`node security-review/inventory-episode-regression.mjs` covers synthetic 127→128
+switches, delayed old responses, local-file/draft reset, 128 single and batch
+submissions, cross-tab persisted outbox isolation, and owner changes. Set
+`CHROMIUM_PATH` to an existing Chrome executable when needed.

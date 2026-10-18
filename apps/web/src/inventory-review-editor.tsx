@@ -29,6 +29,7 @@ export const reviewLabels: Record<InventoryReviewStatus, string> = {
 };
 export function InventoryReviewEditor({
   record,
+  episodeNumber,
   cutRequestsEnabled = false,
   csrfToken,
   draft,
@@ -38,6 +39,7 @@ export function InventoryReviewEditor({
   onFindDerivative,
 }: {
   record: InventoryReadItem;
+  episodeNumber: number;
   cutRequestsEnabled?: boolean;
   csrfToken?: string;
   draft?: InventoryReviewDraft;
@@ -123,7 +125,7 @@ export function InventoryReviewEditor({
         return;
       }
       const payload = {
-        episodeNumber: 127,
+        episodeNumber,
         itemId: record.id,
         expectedRevision: value.revision,
         expectedVersion: value.version,

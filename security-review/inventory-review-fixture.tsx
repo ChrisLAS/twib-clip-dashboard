@@ -159,6 +159,7 @@ function Fixture() {
   remount = () => setKey((v) => v + 1);
   return (
     <InventoryPanel
+      episodeNumber={127}
       owner="fixture-owner"
       key={key}
       active

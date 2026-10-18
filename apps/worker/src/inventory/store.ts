@@ -192,8 +192,8 @@ export function inventoryEpisodeParameter(value: string | null): string {
     );
   return value;
 }
-// The human-readable selector names the separately registered pilot scope. It
-// never infers an association with the current curated dashboard workspace.
+// Numbers select the exact deterministic inventory identity. Owner reads do not
+// expand the separately configured machine ingestion or execution grants.
 export async function inventoryEpisodeSelection(params: URLSearchParams) {
   for (const name of [
     "episodeId",
@@ -225,12 +225,6 @@ export async function inventoryEpisodeSelection(params: URLSearchParams) {
       "Choose an exact inventory episode number.",
     );
   const episodeNumber = Number(rawNumber);
-  if (episodeNumber !== 127)
-    throw new HttpError(
-      404,
-      "INVENTORY_EPISODE_UNMAPPED",
-      "This episode has no registered inventory scope.",
-    );
   const episodeId = await inventoryEpisodeId(episodeNumber);
   if (rawId !== null && inventoryEpisodeParameter(rawId) !== episodeId)
     throw new HttpError(

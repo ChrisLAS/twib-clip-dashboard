@@ -97,6 +97,7 @@ function Fixture() {
       <InventoryBatchPanel
         key={owner}
         scope={{
+          episodeNumber: 127,
           owner,
           source: "fixture-source",
           episode: "fixture-episode",

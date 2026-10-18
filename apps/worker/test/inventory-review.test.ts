@@ -1,4 +1,9 @@
-import { enqueueCut, retryCut, readCut } from "../src/capture-jobs/cut";
+import {
+  attachCuts,
+  enqueueCut,
+  retryCut,
+  readCut,
+} from "../src/capture-jobs/cut";
 import { afterEach, beforeEach, beforeAll, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
@@ -11,6 +16,7 @@ import {
   versionBasisSql,
 } from "../src/inventory/review";
 import {
+  inventoryEpisodeId,
   semanticHash,
   type InventoryManifest,
   type InventoryItem,
@@ -112,8 +118,11 @@ function media(index: number, ref: string): InventoryItem {
 async function accept(
   items: InventoryItem[],
   time = new Date(now + sequence * 60000).toISOString(),
+  episodeNumber = 127,
 ) {
   const manifest = structuredClone(template);
+  manifest.episode.number = episodeNumber;
+  manifest.episode.id = await inventoryEpisodeId(episodeNumber);
   manifest.items = items;
   manifest.observed_at = time;
   manifest.scan_finished_at = time;
@@ -132,7 +141,7 @@ async function accept(
     {
       sourceId: manifest.source_id,
       episodeId: manifest.episode.id,
-      episodeNumber: 127,
+      episodeNumber,
       scope: "inventory:write",
       expiresAt: now + 86400000,
       allowEditorialContext: true,
@@ -1343,3 +1352,55 @@ it.each([536870912, 536870913])(
     );
   },
 );
+
+it("reviews 128 only against its exact inventory observation and preserves 127", async () => {
+  const old = media(900, "old.mp4");
+  await accept([old]);
+  const current = media(901, "current.mp4");
+  await accept([current], undefined, 128);
+  await expect(
+    save(current, "approved", 0, { episodeNumber: 127 }),
+  ).rejects.toMatchObject({ code: "INVENTORY_REVIEW_ITEM_MISSING" });
+  await expect(
+    save(old, "approved", 0, { episodeNumber: 128 }),
+  ).rejects.toMatchObject({ code: "INVENTORY_REVIEW_ITEM_MISSING" });
+  const operationId = crypto.randomUUID();
+  const result = await save(current, "approved", 0, {
+    episodeNumber: 128,
+    operationId,
+  });
+  expect(result.revision).toBe(1);
+  expect(
+    await save(current, "approved", 0, { episodeNumber: 128, operationId }),
+  ).toEqual(result);
+  expect(
+    (await listInventory(db, episode, null)).items[0].review?.revision,
+  ).toBe(0);
+  expect(
+    (await listInventory(db, await inventoryEpisodeId(128), null)).items[0]
+      .review?.revision,
+  ).toBe(1);
+});
+
+it("attaches cut requests only from the selected episode even when item IDs coincide", async () => {
+  const item = media(902, "same-reference.mp4");
+  await accept([item]);
+  await accept([item], undefined, 128);
+  const cutSpec = { kind: "range", startSeconds: 0, endSeconds: 30 };
+  const prior = await save(item, "cut_down", 0, {
+    cutSpec,
+    reason: "Exact range",
+  });
+  const current = await save(item, "cut_down", 0, {
+    episodeNumber: 128,
+    cutSpec,
+    reason: "Exact range",
+  });
+  expect(
+    (await attachCuts(db, [item], 127)).map((cut) => cut.requestId),
+  ).toEqual([prior.cutRequestId]);
+  expect(
+    (await attachCuts(db, [item], 128)).map((cut) => cut.requestId),
+  ).toEqual([current.cutRequestId]);
+  expect(await attachCuts(db, [item], null)).toEqual([]);
+});
