@@ -199,6 +199,7 @@ export async function workView(env: Env, w: Work): Promise<IntakeWorkView> {
         : j.state === "needs_review" ||
           (j.state === "blocked" && j.code === "PROCESSING_DISABLED")),
     cutRequest: cv,
+    rangeDispatchEnabled: ownerRangeDispatchEnabled(env, w.episode_number),
     rangeSelection:
       cut &&
       cutWireSchema.parse(JSON.parse(cut.request_json)).spec.kind ===
@@ -784,22 +785,7 @@ export async function selectIntakeRange(
       throw conflict();
     return result; // Acknowledging committed intent does not renew an expired grant.
   }
-  const starts = Date.parse(env.CAPTURE_JOBS_GRANT_STARTS_AT ?? "");
-  const expires = Date.parse(env.CAPTURE_JOBS_GRANT_EXPIRES_AT ?? "");
-  if (
-    !executionEnabled(env) ||
-    env.CAPTURE_JOBS_GRANT_SOURCE_ID !== "nomad:capture-worker" ||
-    env.CAPTURE_JOBS_GRANT_SHOW !== "twib" ||
-    env.CAPTURE_JOBS_GRANT_SCOPES !== "job:claim,job:result" ||
-    env.CAPTURE_JOBS_GRANT_EPISODE !== String(w.episode_number) ||
-    !Number.isFinite(starts) ||
-    !Number.isFinite(expires) ||
-    expires <= starts ||
-    expires - starts > 86400000 ||
-    now < starts ||
-    now >= expires
-  )
-    throw conflict();
+  if (!ownerRangeDispatchEnabled(env, w.episode_number, now)) throw conflict();
   const guard = `EXISTS(SELECT 1 FROM intake_work_requests w JOIN capture_jobs j ON j.job_id=w.job_id WHERE w.job_id=? AND w.owner=? AND w.cut_request_id=? AND j.state='succeeded' AND ${intakeCurrentSql})
     AND EXISTS(SELECT 1 FROM inventory_cut_requests c WHERE c.request_id=? AND c.owner=? AND c.request_json=? AND c.state='needs_review' AND c.proposal_json IS NULL AND c.derivative_json IS NULL AND c.transition_code IS NULL AND NOT EXISTS(SELECT 1 FROM capture_jobs j WHERE j.job_id=c.request_id))
     AND EXISTS(SELECT 1 FROM inventory_observations o WHERE source_id=? AND episode_id=? AND item_id=? AND receipt_id=? AND sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence))
@@ -868,4 +854,26 @@ export async function selectIntakeRange(
   )
     throw conflict();
   return result;
+}
+
+export function ownerRangeDispatchEnabled(
+  env: Env,
+  episode: number,
+  now = Date.now(),
+) {
+  const starts = Date.parse(env.CAPTURE_JOBS_GRANT_STARTS_AT ?? "");
+  const expires = Date.parse(env.CAPTURE_JOBS_GRANT_EXPIRES_AT ?? "");
+  return !(
+    !executionEnabled(env) ||
+    env.CAPTURE_JOBS_GRANT_SOURCE_ID !== "nomad:capture-worker" ||
+    env.CAPTURE_JOBS_GRANT_SHOW !== "twib" ||
+    env.CAPTURE_JOBS_GRANT_SCOPES !== "job:claim,job:result" ||
+    env.CAPTURE_JOBS_GRANT_EPISODE !== String(episode) ||
+    !Number.isFinite(starts) ||
+    !Number.isFinite(expires) ||
+    expires <= starts ||
+    expires - starts > 86400000 ||
+    now < starts ||
+    now >= expires
+  );
 }

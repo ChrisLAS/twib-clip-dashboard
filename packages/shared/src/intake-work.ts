@@ -16,6 +16,7 @@ export interface IntakeWorkView {
   retryable?: boolean;
   retryTargetId?: string;
   cutRequest?: InventoryCutRequest | null;
+  rangeDispatchEnabled?: boolean;
   rangeSelection?: {
     expectedCutRequestId: string;
     expectedRequestRevision: string;
@@ -38,3 +39,7 @@ export interface IntakeWorkRetryInput {
   expectedAttempt: number;
   expectedTargetId?: string;
 }
+
+export type IntakeRangeInput = NonNullable<IntakeWorkView["rangeSelection"]> & {
+  range: { kind: "range"; startSeconds: number; endSeconds: number };
+};

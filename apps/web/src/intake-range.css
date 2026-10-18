@@ -1,0 +1,30 @@
+.intake-work-card .intake-work-status {
+  display: block;
+}
+.intake-range-form {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--line, #757575);
+  border-radius: 8px;
+}
+.intake-range-form label {
+  display: grid;
+  gap: 6px;
+  max-width: 22rem;
+}
+.intake-range-form input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px;
+  font: inherit;
+}
+.intake-range-form button {
+  justify-self: start;
+  white-space: normal;
+}
+.intake-range-form p {
+  overflow-wrap: anywhere;
+}

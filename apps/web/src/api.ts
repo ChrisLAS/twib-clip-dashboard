@@ -3,6 +3,7 @@ import type {
   IntakeWorkView,
   IntakeWorkInput,
   IntakeWorkRetryInput,
+  IntakeRangeInput,
 } from "@twib/shared";
 import type {
   InventoryResponse,
@@ -75,6 +76,24 @@ export const api = {
   ) =>
     request<IntakeWorkView>(
       `/api/intake/${encodeURIComponent(id)}/work/${encodeURIComponent(jobId)}/retry`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+        body: JSON.stringify(body),
+      },
+    ),
+  selectIntakeRange: (
+    id: string,
+    jobId: string,
+    body: IntakeRangeInput,
+    csrf: string,
+  ) =>
+    request<{
+      requestId: string;
+      sourcePlanRequestId: string;
+      selectionOrigin: "owner_range";
+    }>(
+      `/api/intake/${encodeURIComponent(id)}/work/${encodeURIComponent(jobId)}/range`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },

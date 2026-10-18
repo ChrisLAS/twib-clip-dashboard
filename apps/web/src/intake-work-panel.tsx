@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   IntakeWorkList,
+  IntakeRangeInput,
   IntakeWorkPriority,
   IntakeWorkView,
   ManualIntake,
@@ -8,8 +9,15 @@ import type {
 import { api, RequestError } from "./api";
 import { readIntakeDraft } from "./intake-drafts";
 import { intakeTime } from "./intake-state";
+import { IntakeRangeForm } from "./intake-range-form";
+import {
+  validRangeInput,
+  validRangeReceipt,
+  rangeAttemptConfirmed,
+} from "./intake-range";
 
 export type WorkAttempt =
+  | { kind: "range"; intakeId: string; jobId: string; input: IntakeRangeInput }
   | {
       kind: "save";
       intakeId: string;
@@ -112,6 +120,13 @@ export function parseWorkAttempt(raw: string | null): WorkAttempt | null {
     )
       return value;
     if (
+      value.kind === "range" &&
+      typeof value.jobId === "string" &&
+      value.jobId &&
+      validRangeInput(value.input)
+    )
+      return value;
+    if (
       value.kind === "retry" &&
       typeof value.jobId === "string" &&
       value.jobId &&
@@ -133,14 +148,17 @@ export function workAttemptConfirmed(
   return jobs.some(
     (job) =>
       job.intakeId === attempt.intakeId &&
-      (attempt.kind === "save"
-        ? job.intakeRevision === attempt.expectedRevision &&
-          job.priority === attempt.priority
-        : job.jobId === attempt.jobId &&
-          (job.retryTargetId ?? job.jobId) === attempt.expectedTargetId &&
-          (job.attempt > attempt.expectedAttempt ||
-            (job.attempt === attempt.expectedAttempt &&
-              ["queued", "running"].includes(job.state)))),
+      (attempt.kind === "range"
+        ? job.jobId === attempt.jobId &&
+          rangeAttemptConfirmed(attempt.input, job)
+        : attempt.kind === "save"
+          ? job.intakeRevision === attempt.expectedRevision &&
+            job.priority === attempt.priority
+          : job.jobId === attempt.jobId &&
+            (job.retryTargetId ?? job.jobId) === attempt.expectedTargetId &&
+            (job.attempt > attempt.expectedAttempt ||
+              (job.attempt === attempt.expectedAttempt &&
+                ["queued", "running"].includes(job.state)))),
   );
 }
 export function intakeWorkLabel(
@@ -284,6 +302,22 @@ function OwnerIntakeWorkPanel({
       if (!live.current.mounted || live.current.owner !== owner) return;
       pendingRef.current = attempt;
       setPending(attempt);
+      if (attempt.kind === "range") {
+        const receipt = await api.selectIntakeRange(
+          attempt.intakeId,
+          attempt.jobId,
+          attempt.input,
+          csrf,
+        );
+        if (!validRangeReceipt(receipt, attempt.input))
+          throw new Error("Range receipt could not be verified.");
+        await clearPending(attempt);
+        await refresh();
+        setMessage(
+          "Range selection confirmed. Refresh work status for the latest cut progress. The original and result remain unapproved.",
+        );
+        return;
+      }
       const job =
         attempt.kind === "save"
           ? await api.saveIntakeWork(
@@ -320,7 +354,15 @@ function OwnerIntakeWorkPanel({
         "Work request saved. Check the status below for processing progress.",
       );
     } catch (error) {
-      if (error instanceof RequestError && error.status < 500) {
+      if (attempt.kind === "range") {
+        // Rejection after an earlier uncertain POST cannot disprove its commit.
+        // Only exact readback or explicit owner discard may clear this intent.
+        await refresh();
+        if (pendingRef.current)
+          setMessage(
+            "Range confirmation is unresolved. The saved request is retained. Refresh status or retry the same confirmation; discarding it does not cancel any server work.",
+          );
+      } else if (error instanceof RequestError && error.status < 500) {
         await clearPending(attempt);
         setStatus(null);
         setMessage(error.message + " Refresh work status before trying again.");
@@ -379,11 +421,18 @@ function OwnerIntakeWorkPanel({
       {pending && (
         <div className="intake-warning">
           <p>
-            An unconfirmed {pending.kind === "save" ? "work request" : "retry"}{" "}
+            An unconfirmed{" "}
+            {pending.kind === "save"
+              ? "work request"
+              : pending.kind === "range"
+                ? "range selection"
+                : "retry"}{" "}
             is kept for intake {pending.intakeId}.
             {pending.kind === "save"
               ? ` Revision ${pending.expectedRevision} · ${pending.priority} priority.`
-              : ` Attempt ${pending.expectedAttempt}.`}
+              : pending.kind === "range"
+                ? ` Source seconds ${pending.input.range.startSeconds}–${pending.input.range.endSeconds}.`
+                : ` Attempt ${pending.expectedAttempt}.`}
           </p>
           <button
             type="button"
@@ -392,6 +441,15 @@ function OwnerIntakeWorkPanel({
           >
             Retry work confirmation
           </button>
+          {pending.kind === "range" && (
+            <button
+              type="button"
+              disabled={busy || disabled || !!storageError}
+              onClick={() => void clearPending(pending)}
+            >
+              Discard saved range confirmation (does not cancel work)
+            </button>
+          )}
         </div>
       )}
       {items
@@ -423,7 +481,10 @@ function OwnerIntakeWorkPanel({
                   </p>
                 )}
                 {jobs.map((job) => (
-                  <div key={job.jobId} className="intake-feedback">
+                  <div
+                    key={job.jobId}
+                    className="intake-feedback intake-work-status"
+                  >
                     <p>
                       {intakeWorkLabel(job)} · revision {job.intakeRevision} ·{" "}
                       {job.priority} priority · attempt {job.attempt}
@@ -449,6 +510,33 @@ function OwnerIntakeWorkPanel({
                         and any final cut separately in inventory.
                       </p>
                     )}
+                    {job.rangeSelection &&
+                      job.stage === "needs_direction" &&
+                      job.cutRequest?.spec.kind === "first_pass" &&
+                      !job.cutRequest.proposal && (
+                        <IntakeRangeForm
+                          owner={owner}
+                          job={job}
+                          disabled={
+                            busy ||
+                            disabled ||
+                            !!pending ||
+                            !status?.enabled ||
+                            !!storageError ||
+                            job.stale ||
+                            job.intakeRevision !== item.revision ||
+                            draftMismatch
+                          }
+                          onSubmit={(input) =>
+                            void send({
+                              kind: "range",
+                              intakeId: item.id,
+                              jobId: job.jobId,
+                              input,
+                            })
+                          }
+                        />
+                      )}
                     {job.retryable === true && (
                       <button
                         type="button"

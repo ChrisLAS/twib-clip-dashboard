@@ -1142,3 +1142,22 @@ it("simultaneous distinct first choices cannot both commit", async () => {
   ).toBe(2);
   expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(2);
 });
+it("manual-range availability reflects actual cut grants, not capture-only dispatch", async () => {
+  const f = await manualRangeFixture();
+  env.CAPTURE_JOBS_GRANT_STARTS_AT = new Date(Date.now() - 1000).toISOString();
+  env.CAPTURE_JOBS_GRANT_EXPIRES_AT = new Date(
+    Date.now() + 7200000,
+  ).toISOString();
+  expect(
+    (await listIntakeWork(env, "owner")).jobs[0].rangeDispatchEnabled,
+  ).toBe(true);
+  env.CAPTURE_JOBS_GRANT_OPERATIONS = "capture";
+  let state = await listIntakeWork(env, "owner");
+  expect(state.dispatchEnabled).toBe(true);
+  expect(state.jobs[0].rangeDispatchEnabled).toBe(false);
+  env.CAPTURE_JOBS_GRANT_OPERATIONS = "capture,cut";
+  env.CAPTURE_JOBS_GRANT_EXPIRES_AT = new Date(Date.now()).toISOString();
+  state = await listIntakeWork(env, "owner");
+  expect(state.jobs[0].rangeDispatchEnabled).toBe(false);
+  expect(state.jobs[0].rangeSelection).toEqual(f.view.rangeSelection);
+});
