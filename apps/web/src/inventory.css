@@ -978,3 +978,11 @@
   border-radius: 8px;
   overflow-wrap: anywhere;
 }
+
+.inventory-manual-derivative {
+  padding: 1rem;
+  border: 1px solid currentColor;
+  border-radius: 0.5rem;
+  margin-block: 1rem;
+  overflow-wrap: anywhere;
+}

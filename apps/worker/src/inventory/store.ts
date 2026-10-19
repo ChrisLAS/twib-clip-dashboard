@@ -1,3 +1,4 @@
+import { manualDerivativeRelations } from "./manual-derivative";
 import {
   inventoryVersion,
   reviewView,
@@ -303,6 +304,8 @@ const matchesFilterSql = `
   AND (filters.status IS NULL OR json_extract(latest.item_json,'$.processing_status')=filters.status)
   AND (filters.query='' OR instr(lower(latest.item_id),filters.query)>0
     OR instr(lower(coalesce(json_extract(latest.item_json,'$.media.ref'),'')),filters.query)>0
+    OR instr(lower(coalesce(json_extract(latest.item_json,'$.producer_record.clip_id'),'')),filters.query)>0
+    OR instr(lower(coalesce(json_extract(latest.item_json,'$.producer_record.clip_uid'),'')),filters.query)>0
     OR EXISTS (SELECT 1 FROM json_each(latest.item_json,'$.observations') artifact
       WHERE instr(lower(coalesce(json_extract(artifact.value,'$.artifact'),'')),filters.query)>0)
     OR EXISTS (SELECT 1 FROM json_each(latest.item_json,'$.capture_evidence') evidence
@@ -565,6 +568,7 @@ export async function listInventory(
             : new Date(row.first_seen_ms).toISOString(),
         firstReceivedAt: row.first_received_at,
         producerRecord: item.producer_record,
+        ...(await manualDerivativeRelations(db, episode, item)),
         review: state,
         identityConflict: row.identity_conflict === 1,
         variants: [

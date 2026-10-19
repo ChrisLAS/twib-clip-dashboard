@@ -26,11 +26,7 @@
     "episode": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "show",
-        "number"
-      ],
+      "required": ["id", "show", "number"],
       "properties": {
         "id": {
           "type": "string",
@@ -83,10 +79,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "artifact",
-          "status"
-        ],
+        "required": ["artifact", "status"],
         "properties": {
           "artifact": {
             "anyOf": [
@@ -99,11 +92,7 @@
             ]
           },
           "status": {
-            "enum": [
-              "read",
-              "invalid",
-              "absent"
-            ]
+            "enum": ["read", "invalid", "absent"]
           }
         }
       }
@@ -144,10 +133,7 @@
       "format": "date-time"
     },
     "nullableNumber": {
-      "type": [
-        "number",
-        "null"
-      ],
+      "type": ["number", "null"],
       "minimum": 0
     },
     "media": {
@@ -168,10 +154,7 @@
           "type": "boolean"
         },
         "size_bytes": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "modified_at": {
@@ -192,12 +175,7 @@
     "observation": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "artifact",
-        "status",
-        "context",
-        "timestamps"
-      ],
+      "required": ["artifact", "status", "context", "timestamps"],
       "properties": {
         "artifact": {
           "anyOf": [
@@ -228,25 +206,16 @@
           ]
         },
         "capture_method": {
-          "enum": [
-            "yt-dlp",
-            "browser-network"
-          ]
+          "enum": ["yt-dlp", "browser-network"]
         },
         "provider": {
-          "enum": [
-            "karakeep",
-            "pinboard"
-          ]
+          "enum": ["karakeep", "pinboard"]
         },
         "failure_classes": {
           "type": "array",
           "uniqueItems": true,
           "items": {
-            "enum": [
-              "invalid_media",
-              "downloader_failed"
-            ]
+            "enum": ["invalid_media", "downloader_failed"]
           }
         },
         "context": {
@@ -375,10 +344,7 @@
           "pattern": "^item_[0-9a-f]{64}$"
         },
         "kind": {
-          "enum": [
-            "candidate",
-            "media"
-          ]
+          "enum": ["candidate", "media"]
         },
         "media": {
           "anyOf": [
@@ -401,10 +367,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "id",
-              "url"
-            ],
+            "required": ["id", "url"],
             "properties": {
               "id": {
                 "type": "string",
@@ -528,11 +491,7 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
         },
         "record_kind": {
-          "enum": [
-            "manual-layout",
-            "processing-history",
-            "capture-job"
-          ]
+          "enum": ["manual-layout", "processing-history", "capture-job"]
         },
         "first_seen_at": {
           "anyOf": [
@@ -581,6 +540,53 @@
               "type": "null"
             }
           ]
+        },
+        "manual_derivative": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "parent_clip_id",
+            "source_sha256",
+            "derivative_sha256",
+            "source_in_seconds",
+            "source_out_seconds",
+            "source_duration_seconds",
+            "verification"
+          ],
+          "properties": {
+            "parent_clip_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "source_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "derivative_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "source_in_seconds": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 604800
+            },
+            "source_out_seconds": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 604800
+            },
+            "source_duration_seconds": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 604800
+            },
+            "verification": {
+              "const": "local-sha256"
+            }
+          }
         }
       }
     }

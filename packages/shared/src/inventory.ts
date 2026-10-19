@@ -19,7 +19,17 @@ export const INVENTORY_GROUPS = [
 export type InventoryGroup = (typeof INVENTORY_GROUPS)[number];
 export type InventoryReviewStatus =
   "unreviewed" | "approved" | "rejected" | "cut_down";
+export interface InventoryManualDerivative {
+  parent_clip_id: string;
+  source_sha256: string;
+  derivative_sha256: string;
+  source_in_seconds: number;
+  source_out_seconds: number;
+  source_duration_seconds: number;
+  verification: "local-sha256";
+}
 export interface InventoryProducerRecord {
+  manual_derivative?: InventoryManualDerivative;
   clip_id: string;
   clip_uid?: string | null;
   record_kind: "manual-layout" | "processing-history" | "capture-job";
@@ -155,6 +165,12 @@ export interface InventoryReceiptView {
 }
 
 export interface InventoryReadItem {
+  manualDerivativeSource?: boolean;
+  manualDerivativeParent?: {
+    state: "available" | "reported" | "missing" | "ambiguous" | "changed";
+    itemId?: string;
+    ref?: string;
+  };
   cutRequests?: InventoryCutRequest[];
   identityConflict?: boolean;
   folder?: string;

@@ -1404,3 +1404,193 @@ it("attaches cut requests only from the selected episode even when item IDs coin
   ).toEqual([current.cutRequestId]);
   expect(await attachCuts(db, [item], null)).toEqual([]);
 });
+
+function manualPair() {
+  const parent = media(701, "source/original.mp4");
+  parent.media!.duration_seconds = 90;
+  parent.producer_record = {
+    clip_id: "native-parent",
+    clip_uid: "parent-uid",
+    parent_clip_id: null,
+    record_kind: "processing-history",
+    first_seen_at: null,
+    source_signature: null,
+  };
+  const child = media(702, "edits/short.mp4");
+  child.media!.duration_seconds = 30;
+  child.capture_evidence![0].producer_sha256 = "b".repeat(64);
+  child.producer_record = {
+    clip_id: "native-child",
+    clip_uid: "child-uid",
+    parent_clip_id: "native-parent",
+    record_kind: "processing-history",
+    first_seen_at: null,
+    source_signature: null,
+    manual_derivative: {
+      parent_clip_id: "native-parent",
+      source_sha256: "a".repeat(64),
+      derivative_sha256: "b".repeat(64),
+      source_in_seconds: 10,
+      source_out_seconds: 40,
+      source_duration_seconds: 90,
+      verification: "local-sha256",
+    },
+  };
+  return { parent, child };
+}
+it("resolves a manual edit source across pages and preserves separate reviews and moves", async () => {
+  const { parent, child } = manualPair();
+  await accept([
+    parent,
+    child,
+    ...Array.from({ length: 25 }, (_, i) => media(800 + i, `filler/${i}.mp4`)),
+  ]);
+  await save(parent);
+  const page = await listInventory(db, episode, null, {
+    query: "native-child",
+  });
+  expect(page.items).toHaveLength(1);
+  expect(page.items[0].manualDerivativeParent).toEqual({
+    state: "available",
+    itemId: parent.id,
+    ref: parent.media!.ref,
+  });
+  expect(page.items[0].review?.effectiveStatus).toBe("unreviewed");
+  expect(
+    (
+      await listInventory(db, episode, null, {
+        episodeNumber: 127,
+        query: "parent-uid",
+      })
+    ).items[0].manualDerivativeSource,
+  ).toBe(true);
+  await save(child, "rejected");
+  const moved = structuredClone(parent);
+  moved.id = "item_" + "e".repeat(64);
+  moved.media!.ref = "moved/source.mp4";
+  const missing = structuredClone(parent);
+  missing.media!.present = false;
+  missing.processing_status = "missing";
+  await accept([missing, moved, child]);
+  const after = await listInventory(db, episode, null, {
+    query: "native-child",
+  });
+  expect(after.items[0].manualDerivativeParent).toEqual({
+    state: "available",
+    itemId: moved.id,
+    ref: "moved/source.mp4",
+  });
+  expect(after.items[0].review?.effectiveStatus).toBe("rejected");
+  const parents = await listInventory(db, episode, null, {
+    query: "moved/source.mp4",
+  });
+  expect(parents.items[0].review?.effectiveStatus).toBe("approved");
+});
+it("does not link a missing, different-episode, duplicate or changed source", async () => {
+  const { parent, child } = manualPair();
+  await accept([parent], undefined, 128);
+  await accept([child]);
+  expect(
+    (
+      await listInventory(db, episode, null, {
+        episodeNumber: 127,
+        query: "native-child",
+      })
+    ).items[0].manualDerivativeParent?.state,
+  ).toBe("missing");
+  await accept([parent]);
+  const duplicate = structuredClone(parent);
+  duplicate.id = "item_" + "d".repeat(64);
+  duplicate.media!.ref = "other/source.mp4";
+  await accept([duplicate]);
+  expect(
+    (
+      await listInventory(db, episode, null, {
+        episodeNumber: 127,
+        query: "native-child",
+      })
+    ).items[0].manualDerivativeParent?.state,
+  ).toBe("ambiguous");
+  duplicate.media!.present = false;
+  duplicate.processing_status = "missing";
+  parent.capture_evidence![0].producer_sha256 = "c".repeat(64);
+  await accept([parent, duplicate]);
+  expect(
+    (
+      await listInventory(db, episode, null, {
+        episodeNumber: 127,
+        query: "native-child",
+      })
+    ).items[0].manualDerivativeParent?.state,
+  ).toBe("changed");
+});
+it("provenance-only additions keep the review scope; content changes invalidate it", async () => {
+  const { child } = manualPair();
+  const legacy = structuredClone(child);
+  delete legacy.producer_record!.manual_derivative;
+  await accept([legacy]);
+  await save(legacy);
+  expect(await inventoryVersion(child)).toBe(await inventoryVersion(legacy));
+  await accept([child]);
+  expect(
+    (await listInventory(db, episode, null, {})).items[0].review
+      ?.effectiveStatus,
+  ).toBe("approved");
+  child.media!.size_bytes = 1100;
+  await accept([child]);
+  expect(
+    (await listInventory(db, episode, null, {})).items[0].review
+      ?.effectiveStatus,
+  ).toBe("unreviewed");
+});
+it.each([
+  "parent",
+  "self",
+  "negative",
+  "reverse",
+  "beyond",
+  "duration",
+  "nan",
+  "hash",
+])("rejects invalid manual provenance: %s", async (invalid) => {
+  const { child } = manualPair();
+  const m = child.producer_record!.manual_derivative!;
+  if (invalid === "parent") m.parent_clip_id = "other";
+  if (invalid === "self") {
+    m.parent_clip_id = "native-child";
+    child.producer_record!.parent_clip_id = "native-child";
+  }
+  if (invalid === "negative") m.source_in_seconds = -1;
+  if (invalid === "reverse") m.source_out_seconds = 5;
+  if (invalid === "beyond") m.source_out_seconds = 91;
+  if (invalid === "duration") m.source_duration_seconds = 0;
+  if (invalid === "nan") m.source_in_seconds = NaN;
+  if (invalid === "hash") m.derivative_sha256 = "c".repeat(64);
+  await expect(accept([child])).rejects.toMatchObject({ status: 422 });
+});
+
+it("checks the current hash of an immediate parent that is itself a manual edit", async () => {
+  const { parent, child } = manualPair();
+  delete parent.capture_evidence;
+  parent.processing_status = "unverified";
+  parent.producer_record!.parent_clip_id = "earlier-source";
+  parent.producer_record!.manual_derivative = {
+    ...child.producer_record!.manual_derivative!,
+    parent_clip_id: "earlier-source",
+    source_sha256: "d".repeat(64),
+    derivative_sha256: "a".repeat(64),
+    source_in_seconds: 0,
+    source_out_seconds: 90,
+    source_duration_seconds: 120,
+  };
+  await accept([parent, child]);
+  let result = (
+    await listInventory(db, episode, null, { query: "native-child" })
+  ).items[0];
+  expect(result.manualDerivativeParent?.state).toBe("available");
+  parent.producer_record!.manual_derivative!.derivative_sha256 = "c".repeat(64);
+  await accept([parent]);
+  result = (await listInventory(db, episode, null, { query: "native-child" }))
+    .items[0];
+  expect(result.manualDerivativeParent).toEqual({ state: "changed" });
+});

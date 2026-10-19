@@ -282,6 +282,20 @@ export async function validateInventory(
         containsRecognizableSecret(JSON.stringify(item.producer_record)))
     )
       throw invalid("INVENTORY_PRIVACY_REJECTED");
+    const manual = item.producer_record?.manual_derivative;
+    if (
+      manual &&
+      (manual.parent_clip_id !== item.producer_record?.parent_clip_id ||
+        manual.parent_clip_id === item.producer_record?.clip_id ||
+        manual.parent_clip_id === item.producer_record?.clip_uid ||
+        manual.source_out_seconds <= manual.source_in_seconds ||
+        manual.source_out_seconds > manual.source_duration_seconds ||
+        item.capture_evidence?.some(
+          (e) =>
+            e.producer_sha256 && e.producer_sha256 !== manual.derivative_sha256,
+        ))
+    )
+      throw invalid("INVENTORY_MANUAL_DERIVATIVE_INVALID");
     if (ids.has(item.id)) throw invalid("INVENTORY_DUPLICATE_ITEM");
     ids.add(item.id);
     if (new TextEncoder().encode(JSON.stringify(item)).byteLength > 32768)

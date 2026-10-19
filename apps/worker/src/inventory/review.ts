@@ -74,9 +74,10 @@ export function inventoryVersionBasis(item: InventoryItem) {
     status: item.processing_status,
     hashes: [
       ...new Set(
-        (item.capture_evidence ?? [])
-          .map((e) => e.producer_sha256)
-          .filter(Boolean),
+        [
+          ...(item.capture_evidence ?? []).map((e) => e.producer_sha256),
+          item.producer_record?.manual_derivative?.derivative_sha256,
+        ].filter(Boolean),
       ),
     ].sort(),
   });
@@ -91,7 +92,7 @@ export function versionBasisSql(alias: string) {
   return `json_object('kind',json_extract(${j},'$.kind'),'present',json(CASE WHEN json_extract(${j},'$.media.present')=1 THEN 'true' ELSE 'false' END),
     'size',json_extract(${j},'$.media.size_bytes'),'modified',json_extract(${j},'$.media.modified_at'),
     'duration',json_extract(${j},'$.media.duration_seconds'),'status',json_extract(${j},'$.processing_status'),
-    'hashes',json(coalesce((SELECT json_group_array(hash) FROM (SELECT DISTINCT json_extract(e.value,'$.producer_sha256') hash FROM json_each(${j},'$.capture_evidence') e WHERE json_extract(e.value,'$.producer_sha256') IS NOT NULL ORDER BY hash)), '[]'))) `;
+    'hashes',json(coalesce((SELECT json_group_array(hash) FROM (SELECT json_extract(e.value,'$.producer_sha256') hash FROM json_each(${j},'$.capture_evidence') e WHERE json_extract(e.value,'$.producer_sha256') IS NOT NULL UNION SELECT json_extract(${j},'$.producer_record.manual_derivative.derivative_sha256') hash WHERE json_extract(${j},'$.producer_record.manual_derivative.derivative_sha256') IS NOT NULL ORDER BY hash)), '[]'))) `;
 }
 export function reviewView(
   row: ReviewRow | null,

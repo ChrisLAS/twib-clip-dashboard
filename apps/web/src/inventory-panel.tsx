@@ -1,3 +1,4 @@
+import { InventoryManualDerivative } from "./inventory-manual-derivative";
 import { scopedDraftIds } from "./inventory-batch-outbox";
 import { InventoryBatchPanel } from "./inventory-batch-panel";
 import {
@@ -117,6 +118,11 @@ function InventoryRecord({
             Saved:{" "}
             {reviewLabels[record.review?.effectiveStatus ?? "unreviewed"]}
           </small>
+          {record.producerRecord?.manual_derivative ? (
+            <small>Manual edit</small>
+          ) : record.manualDerivativeSource ? (
+            <small>Reported source for a manual edit</small>
+          ) : null}
           {formatHint && (
             <small className="inventory-format-hint">{formatHint}</small>
           )}
@@ -147,6 +153,10 @@ function InventoryRecord({
             inferred.
           </p>
         )}
+        <InventoryManualDerivative
+          record={record}
+          onFindParent={onFindDerivative}
+        />
         <dl className="inventory-detail-grid">
           <div>
             <dt>Reported by</dt>
@@ -773,7 +783,7 @@ function ScopedInventoryPanel({
               value={draft}
               maxLength={200}
               onChange={(e) => setDraft(e.target.value)}
-              placeholder="Search filename, record ID or artifact reference"
+              placeholder="Search filename, producer ID or artifact reference"
             />
           </label>
           <button type="submit">Search</button>
