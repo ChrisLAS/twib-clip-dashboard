@@ -185,7 +185,16 @@ function hasDraftChanges(item: ManualIntake) {
     !!draft &&
     (draft.baselineRevision !== item.revision ||
       draft.fields.episodeId !== (item.episodeId ?? "") ||
-      draft.fields.start !== intakeTime(item.inMs) ||
+      (draft.fields.timingMode ??
+        (draft.fields.start || draft.fields.end
+          ? "range"
+          : "choose_moment")) !==
+        (item.timing?.kind ??
+          (item.inMs !== null ? "range" : "choose_moment")) ||
+      draft.fields.start !==
+        intakeTime(
+          item.timing?.kind === "source_end" ? item.timing.startMs : item.inMs,
+        ) ||
       draft.fields.end !== intakeTime(item.outMs) ||
       draft.fields.why !== item.whyItMatters)
   );

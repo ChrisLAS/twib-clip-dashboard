@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import {
   safeUploadFolderUrl,
-  validateIntakeRange,
+  validateIntakeTiming,
   validateIntakeUrl,
 } from "@twib/shared";
 import type {
@@ -33,6 +33,7 @@ function blankFields(episodeId: string | null): Fields {
     url: "",
     episodeId: episodeId ?? "",
     kind: "already_cut",
+    timingMode: "choose_moment",
     start: "",
     end: "",
     why: "",
@@ -43,7 +44,11 @@ function fieldsFor(item: ManualIntake): Fields {
     url: item.submittedUrl,
     episodeId: item.episodeId ?? "",
     kind: item.kind,
-    start: intakeTime(item.inMs),
+    timingMode:
+      item.timing?.kind ?? (item.inMs !== null ? "range" : "choose_moment"),
+    start: intakeTime(
+      item.timing?.kind === "source_end" ? item.timing.startMs : item.inMs,
+    ),
     end: intakeTime(item.outMs),
     why: item.whyItMatters,
   };
@@ -240,9 +245,16 @@ export function ManualIntakePanel({
       setMessage(url.error);
       return;
     }
-    const inMs = parseIntakeTime(fields.start),
-      outMs = parseIntakeTime(fields.end);
-    const rangeError = validateIntakeRange(inMs, outMs);
+    const mode =
+      fields.timingMode ??
+      (fields.start || fields.end ? "range" : "choose_moment");
+    const timing =
+      mode === "source_end"
+        ? { kind: mode, startMs: parseIntakeTime(fields.start) ?? Number.NaN }
+        : { kind: mode };
+    const inMs = mode === "range" ? parseIntakeTime(fields.start) : null,
+      outMs = mode === "range" ? parseIntakeTime(fields.end) : null;
+    const rangeError = validateIntakeTiming(timing, inMs, outMs);
     if (rangeError) {
       setMessage(rangeError);
       return;
@@ -251,6 +263,7 @@ export function ManualIntakePanel({
       episodeId: fields.episodeId || null,
       inMs,
       outMs,
+      timing,
       whyItMatters: fields.why.trim(),
       allowDifferentRange,
       idempotencyKey: crypto.randomUUID(),
@@ -371,6 +384,15 @@ export function ManualIntakePanel({
             </a>
           ) : (
             <span>Source link unavailable</span>
+          )}
+          {item.timing?.kind === "source_end" && (
+            <p>
+              Source time {intakeTime(item.timing.startMs)} through verified
+              source end
+            </p>
+          )}
+          {item.timing?.kind === "choose_moment" && (
+            <p>Choose the best moment · notes only</p>
           )}
           {item.whyItMatters && <p>{item.whyItMatters}</p>}
           <small>
@@ -555,31 +577,72 @@ export function ManualIntakePanel({
                     </select>
                   </label>
                 </div>
-                <div className="intake-form-grid">
-                  <label>
-                    Start time <span className="muted">(optional)</span>
-                    <input
-                      ref={startInput}
-                      inputMode="decimal"
-                      placeholder="0:00"
-                      value={fields.start}
-                      onChange={(event) => change("start", event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    End time <span className="muted">(optional)</span>
-                    <input
-                      inputMode="decimal"
-                      placeholder="1:30"
-                      value={fields.end}
-                      onChange={(event) => change("end", event.target.value)}
-                    />
-                  </label>
-                </div>
+                <label>
+                  Timing
+                  <select
+                    value={
+                      fields.timingMode ??
+                      (fields.start || fields.end ? "range" : "choose_moment")
+                    }
+                    onChange={(event) =>
+                      setFields((previous) => ({
+                        ...previous,
+                        timingMode: event.target.value as Fields["timingMode"],
+                        start: "",
+                        end: "",
+                      }))
+                    }
+                  >
+                    <option value="choose_moment">
+                      Choose the best moment · notes only
+                    </option>
+                    <option value="range">Exact start and end</option>
+                    <option value="source_end">Start through source end</option>
+                  </select>
+                </label>
+                {(fields.timingMode ??
+                  (fields.start || fields.end ? "range" : "choose_moment")) !==
+                  "choose_moment" && (
+                  <div className="intake-form-grid">
+                    <label>
+                      Start time{" "}
+                      <span className="muted">(required for this mode)</span>
+                      <input
+                        ref={startInput}
+                        inputMode="decimal"
+                        placeholder="0:00"
+                        value={fields.start}
+                        onChange={(event) =>
+                          change("start", event.target.value)
+                        }
+                      />
+                    </label>
+                    {fields.timingMode !== "source_end" && (
+                      <label>
+                        End time{" "}
+                        <span className="muted">
+                          (required for exact range)
+                        </span>
+                        <input
+                          inputMode="decimal"
+                          placeholder="1:30"
+                          value={fields.end}
+                          onChange={(event) =>
+                            change("end", event.target.value)
+                          }
+                        />
+                      </label>
+                    )}
+                  </div>
+                )}
                 <small className="muted">
-                  Use seconds, m:ss or h:mm:ss. Provide both times, or leave
-                  both blank. Times refer to the source. Timestamps in pasted
-                  links are not imported; enter your intended range here.
+                  Times are optional. Use notes to describe the moment; capture
+                  can proceed, but choosing a cut still needs direction while
+                  planning is disabled. Exact times use seconds, m:ss or h:mm:ss
+                  (up to milliseconds). Start through source end uses the
+                  verified captured duration, never a blank field. Cuts over
+                  three minutes need direction. Timestamps in pasted links are
+                  not imported.
                 </small>
                 <label>
                   Why it matters <span className="muted">(optional)</span>

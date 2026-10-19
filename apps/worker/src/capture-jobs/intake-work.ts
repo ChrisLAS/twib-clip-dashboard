@@ -37,6 +37,39 @@ export const intakeDispatchEnabled = (env: Env) =>
   env.CAPTURE_JOBS_ENABLED === "true" &&
   kindGranted(env, "capture") &&
   /^[1-9][0-9]{0,5}$/.test(env.CAPTURE_JOBS_GRANT_EPISODE ?? "");
+const sourceEndSpecSchema = z
+  .object({
+    kind: z.literal("source_end"),
+    startSeconds: z.number().finite().nonnegative().max(604799.999),
+    guidance: z.string().max(2000).optional(),
+  })
+  .strict();
+const intakeSpecSchema = z.union([sourceEndSpecSchema, cutSpecSchema]);
+export function resolveIntakeSpec(value: unknown, duration: number) {
+  const intent = intakeSpecSchema.parse(value);
+  if (intent.kind !== "source_end") return intent;
+  // Round inward to the supported millisecond precision; never extend beyond source proof.
+  const end = Math.floor(duration * 1000) / 1000;
+  if (
+    Number.isFinite(end) &&
+    end <= 86400 &&
+    end > intent.startSeconds &&
+    end - intent.startSeconds <= 180
+  )
+    return cutSpecSchema.parse({
+      kind: "range",
+      startSeconds: intent.startSeconds,
+      endSeconds: end,
+    });
+  // Preserve the original immutable intent; this pending request permits only a later owner selection.
+  return cutSpecSchema.parse({
+    kind: "first_pass",
+    ...(intent.startSeconds <= 86400
+      ? { startSeconds: intent.startSeconds }
+      : {}),
+    ...(intent.guidance ? { guidance: intent.guidance } : {}),
+  });
+}
 const conflict = () =>
   new HttpError(
     409,
@@ -283,19 +316,27 @@ export async function requestIntakeWork(
       "GUIDANCE_TOO_LONG",
       "Keep optional cut guidance within 2000 characters; the original submission notes remain saved.",
     );
-  const spec = cutSpecSchema.parse(
-    item.inMs !== null && item.outMs !== null
+  const spec = intakeSpecSchema.parse(
+    item.timing?.kind === "source_end"
       ? {
-          kind: "range",
-          startSeconds: item.inMs / 1000,
-          endSeconds: item.outMs / 1000,
-        }
-      : {
-          kind: "first_pass",
+          kind: "source_end",
+          startSeconds: item.timing.startMs / 1000,
           ...(item.whyItMatters.trim()
             ? { guidance: item.whyItMatters.trim() }
             : {}),
-        },
+        }
+      : item.inMs !== null && item.outMs !== null
+        ? {
+            kind: "range",
+            startSeconds: item.inMs / 1000,
+            endSeconds: item.outMs / 1000,
+          }
+        : {
+            kind: "first_pass",
+            ...(item.whyItMatters.trim()
+              ? { guidance: item.whyItMatters.trim() }
+              : {}),
+          },
   );
   const wire = JSON.stringify(
     createJobSchema.parse({
@@ -399,6 +440,12 @@ export async function retryIntakeWork(
     if (!cut || cut.owner !== owner) throw conflict();
     const spec = cutWireSchema.parse(JSON.parse(cut.request_json)).spec;
     const planning = spec.kind !== "range";
+    if (planning && JSON.parse(w.spec_json).kind === "source_end")
+      throw new HttpError(
+        409,
+        "SOURCE_END_NEEDS_DIRECTION",
+        "The source-end range needs an explicit valid selection.",
+      );
     if (view.attempt !== input.expectedAttempt) {
       const retryId = await uuid(
         JSON.stringify(["intake-retry/v1", target, input.expectedAttempt]),
@@ -521,6 +568,11 @@ async function advanceOne(env: Env, w: Work) {
     if (cut) {
       const spec = cutWireSchema.parse(JSON.parse(cut.request_json)).spec;
       if (
+        spec.kind !== "range" &&
+        JSON.parse(w.spec_json).kind === "source_end"
+      )
+        return;
+      if (
         (spec.kind === "range"
           ? executionEnabled(env)
           : planningEnabled(env)) &&
@@ -623,7 +675,10 @@ async function advanceOne(env: Env, w: Work) {
       "MANUAL_REVIEW_PRESENT",
       "An existing human review must be respected.",
     );
-  const spec = cutSpecSchema.parse(JSON.parse(w.spec_json));
+  const spec = resolveIntakeSpec(
+    JSON.parse(w.spec_json),
+    proof.duration_seconds,
+  );
   if (spec.kind === "range" && spec.endSeconds > proof.duration_seconds)
     throw new HttpError(
       409,

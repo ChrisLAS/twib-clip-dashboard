@@ -112,3 +112,14 @@ intentionally excludes earlier requests and their retries, even when their
 downstream jobs were created later. This does not change result reconciliation:
 existing lease/attempt and authentication checks still govern receipts. The
 cutoff is checked in the atomic claim selection, not only a queue preflight.
+
+
+## Optional owner timing
+
+New intake saves choose an explicit timing mode: notes-only (`choose_moment`), paired exact times (`range`), or a start through the verified source end (`source_end`, integer `startMs`). The optional `timing` object lives in existing intake JSON; indexed `inMs`/`outMs` remain a complete pair or both null. Older records without the object retain their prior behavior. Blank end never implies source end. Notes remain saved independently, and editing never submits work.
+
+Work freezes source-end intent in the existing immutable request. Only the exact successful capture receipt plus its unique current hash-bound native inventory original can resolve the end. The duration is rounded inward to milliseconds and pinned as an existing finite range with the exact parent/version. A nonpositive range or a range over 180 seconds remains needs-direction and cannot become an automatic planning job. Owner selection can later provide an exact valid range. Replays retain the original linked range; changed parent evidence fails existing cut eligibility rather than silently resolving another end. Notes-only requests retain the existing first-pass/needs-direction behavior while planning is disabled.
+
+No migration, machine claim/result schema, grant, execution gate, or planning activation is part of this change. Publication requires local checks, independent review and exact-revision hosted browser success before deployment.
+
+Duplicate protection stays deliberately conservative: notes-only and source-end modes both use null indexed endpoints, so a second pending submission of the same URL is rejected even if its source-end start differs. Edit the existing intake to a new immutable revision instead; this never alters a previously saved work request.

@@ -9,6 +9,7 @@ import {
   retryIntakeWork,
   advanceIntakeWork,
   ownerRangeDispatchEnabled,
+  resolveIntakeSpec,
 } from "../src/capture-jobs/intake-work";
 import {
   claimJob,
@@ -340,9 +341,19 @@ it("explicit retry releases saved work only with exact configured scope; uncerta
   ).toBe("queued");
   expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(1);
 });
-async function captured(range?: [number, number]) {
+async function captured(
+  range?: [number, number],
+  timing?: { kind: "source_end"; startMs: number },
+  duration = 600,
+) {
   enabled();
-  intake(1, range);
+  intake(1, range, timing ? "Keep the closing explanation" : "");
+  if (timing)
+    raw
+      .prepare(
+        "UPDATE manual_intake SET data=json_set(data,'$.timing',json(?)) WHERE id='intake-1'",
+      )
+      .run(JSON.stringify(timing));
   const a = await requestIntakeWork(
     env,
     "intake-1",
@@ -357,7 +368,7 @@ async function captured(range?: [number, number]) {
     ref: `new-review/${a.jobId}-a1.mp4`,
     sha256: "a".repeat(64),
     size_bytes: 100,
-    duration_seconds: 600,
+    duration_seconds: duration,
     show: "twib",
     episode: 128,
     editorial_ready: false,
@@ -1366,4 +1377,149 @@ it("claim maintenance preserves excluded old leases and expires eligible ones", 
       .prepare("SELECT state,code FROM capture_jobs WHERE job_id=?")
       .get(id(92)),
   ).toEqual({ state: "needs_review", code: "LEASE_EXPIRED" });
+});
+
+it("source-end resolution keeps millisecond precision and fails closed at bounds", () => {
+  const intent = {
+    kind: "source_end",
+    startSeconds: 43,
+    guidance: "Keep this context",
+  };
+  expect(resolveIntakeSpec(intent, 88.305)).toEqual({
+    kind: "range",
+    startSeconds: 43,
+    endSeconds: 88.305,
+  });
+  expect(resolveIntakeSpec(intent, 88.3059)).toEqual({
+    kind: "range",
+    startSeconds: 43,
+    endSeconds: 88.305,
+  });
+  expect(resolveIntakeSpec(intent, 223)).toMatchObject({
+    kind: "range",
+    endSeconds: 223,
+  });
+  for (const duration of [43, 42.999, 43.0009, 223.001, NaN, Infinity])
+    expect(resolveIntakeSpec(intent, duration)).toEqual({
+      kind: "first_pass",
+      startSeconds: 43,
+      guidance: "Keep this context",
+    });
+  expect(intent).toEqual({
+    kind: "source_end",
+    startSeconds: 43,
+    guidance: "Keep this context",
+  });
+});
+it("freezes source-end intent and resolves only the verified parent, with stable replay", async () => {
+  const { a, proof } = await captured(
+    undefined,
+    { kind: "source_end", startMs: 43000 },
+    88.305,
+  );
+  const original = raw
+    .prepare("SELECT spec_json FROM intake_work_requests")
+    .get()?.spec_json;
+  expect(JSON.parse(String(original))).toEqual({
+    kind: "source_end",
+    startSeconds: 43,
+    guidance: "Keep the closing explanation",
+  });
+  await advanceIntakeWork(env, a.jobId);
+  expect(
+    raw.prepare("SELECT count(*) n FROM inventory_cut_requests").get()?.n,
+  ).toBe(0);
+  await observe(proof);
+  await advanceIntakeWork(env, a.jobId);
+  const first = raw
+    .prepare("SELECT request_json FROM inventory_cut_requests")
+    .get()?.request_json;
+  expect(JSON.parse(String(first)).spec).toEqual({
+    kind: "range",
+    startSeconds: 43,
+    endSeconds: 88.305,
+  });
+  expect(JSON.parse(String(first)).parent.sha256).toBe(proof.sha256);
+  await advanceIntakeWork(env, a.jobId);
+  expect(
+    raw.prepare("SELECT request_json FROM inventory_cut_requests").get()
+      ?.request_json,
+  ).toBe(first);
+  expect(
+    raw.prepare("SELECT spec_json FROM intake_work_requests").get()?.spec_json,
+  ).toBe(original);
+  expect(raw.prepare("SELECT count(*) n FROM inventory_reviews").get()?.n).toBe(
+    0,
+  );
+});
+it("invalid source-end stays needs-direction even with planning enabled and retains notes", async () => {
+  const { a, proof } = await captured(
+    undefined,
+    { kind: "source_end", startMs: 43000 },
+    600,
+  );
+  await observe(proof);
+  env.CUT_PLANNING_ENABLED = "true";
+  env.CUT_JOBS_ENABLED = "true";
+  await advanceIntakeWork(env, a.jobId);
+  await advanceIntakeWork(env, a.jobId);
+  const cut = raw
+    .prepare("SELECT state,request_json FROM inventory_cut_requests")
+    .get();
+  expect(cut?.state).toBe("needs_review");
+  expect(JSON.parse(String(cut?.request_json)).spec).toEqual({
+    kind: "first_pass",
+    startSeconds: 43,
+    guidance: "Keep the closing explanation",
+  });
+  expect((await listIntakeWork(env, "owner")).jobs[0].stage).toBe(
+    "needs_direction",
+  );
+  expect(raw.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(1);
+  expect(
+    JSON.parse(
+      String(
+        raw.prepare("SELECT spec_json FROM intake_work_requests").get()
+          ?.spec_json,
+      ),
+    ).kind,
+  ).toBe("source_end");
+});
+
+it("source-end refuses changed parent hashes and never re-resolves a linked range", async () => {
+  const { a, proof } = await captured(
+    undefined,
+    { kind: "source_end", startMs: 43000 },
+    88.305,
+  );
+  await observe({ ...proof, sha256: "b".repeat(64) });
+  await advanceIntakeWork(env, a.jobId);
+  expect(
+    raw.prepare("SELECT count(*) n FROM inventory_cut_requests").get()?.n,
+  ).toBe(0);
+  raw
+    .prepare(
+      "UPDATE inventory_observations SET item_json=json_set(item_json,'$.capture_evidence[0].producer_sha256',?)",
+    )
+    .run(proof.sha256);
+  await advanceIntakeWork(env, a.jobId);
+  const cut = raw
+    .prepare("SELECT request_id,request_json FROM inventory_cut_requests")
+    .get()!;
+  raw
+    .prepare(
+      "UPDATE inventory_observations SET item_json=json_set(item_json,'$.capture_evidence[0].producer_sha256',?,'$.media.duration_seconds',90)",
+    )
+    .run("c".repeat(64));
+  env.CUT_JOBS_ENABLED = "true";
+  await advanceIntakeWork(env, a.jobId);
+  expect(
+    raw.prepare("SELECT request_json FROM inventory_cut_requests").get()
+      ?.request_json,
+  ).toBe(cut.request_json);
+  const record = await readCut(db, String(cut.request_id));
+  await expect(eligibility(db, record!)).rejects.toMatchObject({ status: 409 });
+  expect(
+    raw.prepare("SELECT count(*) n FROM inventory_cut_requests").get()?.n,
+  ).toBe(1);
 });

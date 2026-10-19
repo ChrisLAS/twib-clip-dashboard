@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
   validateIntakeUrl,
-  validateIntakeRange,
+  validateIntakeTiming,
   type IntakeCreateInput,
   type IntakeUpdateInput,
   type IntakeDuplicateMatch,
@@ -30,6 +30,18 @@ const editableFields = {
     .optional(),
   inMs: z.number().int().nonnegative().max(604_800_000).nullable().optional(),
   outMs: z.number().int().positive().max(604_800_000).nullable().optional(),
+  timing: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("choose_moment") }).strict(),
+      z.object({ kind: z.literal("range") }).strict(),
+      z
+        .object({
+          kind: z.literal("source_end"),
+          startMs: z.number().int().nonnegative().max(604_799_999),
+        })
+        .strict(),
+    ])
+    .optional(),
   whyItMatters: z.string().max(5000).optional(),
   allowDifferentRange: z.boolean().optional(),
 };
@@ -56,7 +68,8 @@ export const intakeUpdateSchema = z
       (value.episodeId === undefined &&
         value.inMs === undefined &&
         value.outMs === undefined &&
-        value.whyItMatters === undefined),
+        value.whyItMatters === undefined &&
+        value.timing === undefined),
     "Only an update may edit the submission.",
   );
 
@@ -269,6 +282,7 @@ export async function mutateIntake(
         provider: url.provider,
         inMs: input.inMs ?? null,
         outMs: input.outMs ?? null,
+        ...(input.timing ? { timing: input.timing } : {}),
         whyItMatters: input.whyItMatters ?? "",
         status: "awaiting_processing",
         revision: 1,
@@ -284,13 +298,18 @@ export async function mutateIntake(
           input.episodeId === undefined ? existing.episodeId : input.episodeId,
         inMs: input.inMs === undefined ? existing.inMs : input.inMs,
         outMs: input.outMs === undefined ? existing.outMs : input.outMs,
+        ...(input.timing ? { timing: input.timing } : {}),
         whyItMatters: input.whyItMatters ?? existing.whyItMatters,
         status: action === "cancel" ? "cancelled" : "awaiting_processing",
         revision: input.expectedRevision + 1,
         updatedAt: now,
       };
     }
-    const rangeError = validateIntakeRange(intake.inMs, intake.outMs);
+    const rangeError = validateIntakeTiming(
+      intake.timing,
+      intake.inMs,
+      intake.outMs,
+    );
     if (rangeError) throw new HttpError(422, "INVALID_RANGE", rangeError);
     await checkEpisode(db, intake.episodeId, action === "cancel");
     const catalog = await db

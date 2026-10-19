@@ -714,6 +714,53 @@ describe("authenticated intake HTTP routes", () => {
       env,
     );
   }
+  it("accepts explicit source-end through authenticated HTTP and rejects mixed modes", async () => {
+    const session = (await (
+      await worker.fetch(new Request("http://localhost/api/session"), env)
+    ).json()) as { csrfToken: string };
+    const request = input({
+      timing: { kind: "source_end", startMs: 43000 },
+      whyItMatters: "Keep the closing point",
+    });
+    const response = await post("/api/intake", request, session.csrfToken);
+    expect(response.status).toBe(200);
+    const saved = (await response.json()) as { intake: ManualIntake };
+    expect(saved.intake).toMatchObject({
+      timing: { kind: "source_end", startMs: 43000 },
+      inMs: null,
+      outMs: null,
+      whyItMatters: "Keep the closing point",
+    });
+    expect(
+      await (await post("/api/intake", request, session.csrfToken)).json(),
+    ).toEqual(saved);
+    for (const timing of [
+      { kind: "source_end", startMs: 43.1 },
+      { kind: "source_end", startMs: 43000, endMs: 88305 },
+      { kind: "choose_moment", startMs: 43000 },
+      { kind: "range" },
+    ]) {
+      const result = await post(
+        "/api/intake",
+        { ...input(), timing },
+        session.csrfToken,
+      );
+      expect(result.status).toBe(422);
+    }
+    expect(
+      (
+        await post(
+          "/api/intake",
+          input({
+            timing: { kind: "source_end", startMs: 43000 },
+            inMs: 43000,
+            outMs: 88305,
+          }),
+          session.csrfToken,
+        )
+      ).status,
+    ).toBe(422);
+  });
   it("requires mutation CSRF, emits duplicate targets, supports receipt reconciliation and never fetches URLs", async () => {
     const fetcher = vi.fn(() => {
       throw new Error("No fetch");
@@ -818,4 +865,75 @@ describe("authenticated intake HTTP routes", () => {
     ).toBe(401);
     expect(state().intake).toBe(0);
   });
+});
+
+it("explicit timing updates retain notes and require current revisions without work creation", async () => {
+  const saved = await mutateIntake(
+    db,
+    null,
+    input({
+      timing: { kind: "choose_moment" },
+      whyItMatters: "Original notes",
+    }),
+    owner,
+  );
+  const change = {
+    action: "update" as const,
+    expectedRevision: 1,
+    idempotencyKey: crypto.randomUUID(),
+    timing: { kind: "source_end" as const, startMs: 43000 },
+  };
+  const updated = await mutateIntake(db, saved.intake.id, change, owner);
+  expect(updated.intake).toMatchObject({
+    revision: 2,
+    inMs: null,
+    outMs: null,
+    whyItMatters: "Original notes",
+    timing: { kind: "source_end", startMs: 43000 },
+  });
+  expect(await mutateIntake(db, saved.intake.id, change, owner)).toEqual(
+    updated,
+  );
+  await expect(
+    mutateIntake(
+      db,
+      saved.intake.id,
+      { ...change, idempotencyKey: crypto.randomUUID() },
+      owner,
+    ),
+  ).rejects.toMatchObject({ status: 409 });
+  expect(count("intake_work_requests")).toBe(0);
+});
+
+it("keeps conservative duplicate-source protection across JSON-only timing modes", async () => {
+  const saved = await mutateIntake(
+    db,
+    null,
+    input({ timing: { kind: "choose_moment" }, whyItMatters: "Keep notes" }),
+    owner,
+  );
+  await expect(
+    mutateIntake(
+      db,
+      null,
+      input({
+        timing: { kind: "source_end", startMs: 43000 },
+        allowDifferentRange: true,
+      }),
+      owner,
+    ),
+  ).rejects.toMatchObject({ status: 409, code: "DUPLICATE_INTAKE" });
+  const edited = await mutateIntake(
+    db,
+    saved.intake.id,
+    {
+      action: "update",
+      expectedRevision: 1,
+      idempotencyKey: crypto.randomUUID(),
+      timing: { kind: "source_end", startMs: 43000 },
+    },
+    owner,
+  );
+  expect(edited.intake.whyItMatters).toBe("Keep notes");
+  expect(count("manual_intake")).toBe(1);
 });

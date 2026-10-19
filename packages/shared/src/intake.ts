@@ -130,6 +130,42 @@ export function validateIntakeRange(
   return null;
 }
 
+export type IntakeTiming =
+  | { kind: "choose_moment" }
+  | { kind: "range" }
+  | { kind: "source_end"; startMs: number };
+
+export function validateIntakeTiming(
+  timing: IntakeTiming | undefined,
+  inMs: number | null | undefined,
+  outMs: number | null | undefined,
+): string | null {
+  if (timing === undefined) return validateIntakeRange(inMs, outMs);
+  if (!timing || typeof timing !== "object")
+    return "Choose a valid timing mode.";
+  const keys = Object.keys(timing).sort().join(",");
+  if (timing.kind === "source_end") {
+    return keys === "kind,startMs" &&
+      inMs == null &&
+      outMs == null &&
+      Number.isSafeInteger(timing.startMs) &&
+      timing.startMs >= 0 &&
+      timing.startMs < 604_800_000
+      ? null
+      : "Source-end timing requires only a start time.";
+  }
+  if (keys !== "kind") return "Timing modes cannot contain mixed fields.";
+  if (timing.kind === "choose_moment")
+    return inMs == null && outMs == null
+      ? null
+      : "Choose-moment timing does not use exact times.";
+  if (timing.kind === "range")
+    return inMs == null || outMs == null
+      ? "Enter both exact times."
+      : validateIntakeRange(inMs, outMs);
+  return "Choose a valid timing mode.";
+}
+
 export interface ManualIntake {
   id: string;
   episodeId: string | null;
@@ -139,6 +175,7 @@ export interface ManualIntake {
   provider: IntakeProvider;
   inMs: number | null;
   outMs: number | null;
+  timing?: IntakeTiming;
   whyItMatters: string;
   status: "awaiting_processing" | "cancelled";
   revision: number;
@@ -151,6 +188,7 @@ export interface IntakeCreateInput {
   url: string;
   inMs?: number | null;
   outMs?: number | null;
+  timing?: IntakeTiming;
   whyItMatters?: string;
   allowDifferentRange?: boolean;
   expectedRevision: 0;
@@ -161,6 +199,7 @@ export interface IntakeUpdateInput {
   episodeId?: string | null;
   inMs?: number | null;
   outMs?: number | null;
+  timing?: IntakeTiming;
   whyItMatters?: string;
   allowDifferentRange?: boolean;
   expectedRevision: number;

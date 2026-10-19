@@ -4,6 +4,7 @@ export type Fields = {
   url: string;
   episodeId: string;
   kind: "already_cut" | "full_source";
+  timingMode?: "choose_moment" | "range" | "source_end";
   start: string;
   end: string;
   why: string;
@@ -33,6 +34,10 @@ export function readIntakeDraft(editing?: string | null): SavedDraft | null {
       typeof candidate.fields.url !== "string" ||
       typeof candidate.fields.episodeId !== "string" ||
       !["already_cut", "full_source"].includes(candidate.fields.kind) ||
+      (candidate.fields.timingMode !== undefined &&
+        !["choose_moment", "range", "source_end"].includes(
+          candidate.fields.timingMode,
+        )) ||
       typeof candidate.fields.start !== "string" ||
       typeof candidate.fields.end !== "string" ||
       typeof candidate.fields.why !== "string"

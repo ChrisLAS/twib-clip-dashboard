@@ -515,6 +515,7 @@ async function handleIntakeFixture(route, path) {
           : "other",
       inMs: input.inMs ?? null,
       outMs: input.outMs ?? null,
+      ...(input.timing ? { timing: input.timing } : {}),
       whyItMatters: input.whyItMatters ?? "",
       status: "awaiting_processing",
       revision: 1,
@@ -661,8 +662,13 @@ async function fillIntake(
     .getByLabel("Source URL or private Drive link", { exact: true })
     .fill(url);
   await dialog.getByLabel(/^Source type/).selectOption(kind);
-  await dialog.getByLabel(/^Start time/).fill(start);
-  await dialog.getByLabel(/^End time/).fill(end);
+  await dialog
+    .getByLabel(/^Timing/)
+    .selectOption(start || end ? "range" : "choose_moment");
+  if (start || end) {
+    await dialog.getByLabel(/^Start time/).fill(start);
+    await dialog.getByLabel(/^End time/).fill(end);
+  }
   await dialog.getByLabel(/^Why it matters/).fill(note);
 }
 async function saveIntake(dialog) {
@@ -2033,7 +2039,9 @@ try {
         .isVisible()) &&
       (await page
         .locator(".manual-intake")
-        .getByText(/Saved submissions are not playable clips or ready for review\. Save a separate work request/)
+        .getByText(
+          /Saved submissions are not playable clips or ready for review\. Save a separate work request/,
+        )
         .isVisible()) &&
       (await page.locator(".clip-row,video").count()) === 0 &&
       !(await page
@@ -2096,6 +2104,7 @@ try {
         .getByText(/Change the start and end times/)
         .isVisible()),
   );
+  await intakeDialog.getByLabel(/^Timing/).selectOption("range");
   await intakeDialog.getByLabel(/^Start time/).fill("1:13");
   await intakeDialog.getByLabel(/^End time/).fill("1:23");
   await saveIntake(intakeDialog);
@@ -2410,6 +2419,49 @@ try {
     externalRequests.length === 0 && imports.length === automaticImportStart,
   );
   await capture("episode-manual-intake-slate");
+
+  await chooseWorkspace("ep-127");
+  const timingDialog = await openIntake();
+  await timingDialog.getByLabel(/^Timing/).selectOption("choose_moment");
+  await timingDialog
+    .getByLabel(/^Why it matters/)
+    .fill("Preserve the closing explanation <not markup>");
+  check(
+    "Notes-only timing needs no timestamp fields",
+    (await timingDialog.getByLabel(/^Start time/).count()) === 0,
+  );
+  await timingDialog.getByLabel(/^Timing/).selectOption("source_end");
+  await timingDialog
+    .getByLabel(/^Source URL/)
+    .fill("https://x.com/fixture/status/1234567890123456789");
+  await timingDialog.getByLabel(/^Start time/).fill("43");
+  check(
+    "Source-end is explicit and preserves notes without an end field",
+    (await timingDialog.getByLabel(/^End time/).count()) === 0 &&
+      (await timingDialog.getByLabel(/^Why it matters/).inputValue()).includes(
+        "closing explanation",
+      ),
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  check(
+    "Optional timing form fits mobile viewport",
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <=
+        document.documentElement.clientWidth,
+    ),
+  );
+  await saveIntake(timingDialog);
+  check(
+    "Source-end save carries JSON intent without fabricated indexed endpoints",
+    manualIntake.at(-1).timing.kind === "source_end" &&
+      manualIntake.at(-1).timing.startMs === 43000 &&
+      manualIntake.at(-1).inMs === null &&
+      manualIntake.at(-1).outMs === null &&
+      manualIntake.at(-1).whyItMatters ===
+        "Preserve the closing explanation <not markup>",
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
 
   // Additional visual-only evidence: the app's built-in five-record fictional demo.
   // This does not replace API/media fixture checks or establish live integration.

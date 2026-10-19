@@ -1,3 +1,4 @@
+import { validateIntakeTiming } from "@twib/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   Episode,
@@ -267,4 +268,23 @@ describe("resumable intake drafts", () => {
     expect(readIntakeDraft()).toBeNull();
     expect(() => saveIntakeDraft(draft)).not.toThrow();
   });
+});
+
+it("explicit timing modes preserve millisecond intent and reject implicit partial ranges", () => {
+  expect(parseIntakeTime("88.305")).toBe(88305);
+  expect(
+    validateIntakeTiming({ kind: "source_end", startMs: 43000 }, null, null),
+  ).toBeNull();
+  expect(validateIntakeTiming({ kind: "range" }, 43000, 88305)).toBeNull();
+  expect(
+    validateIntakeTiming({ kind: "choose_moment" }, null, null),
+  ).toBeNull();
+  expect(validateIntakeTiming(undefined, 43000, null)).not.toBeNull();
+  expect(
+    validateIntakeTiming({ kind: "source_end", startMs: 43000 }, 43000, 88305),
+  ).not.toBeNull();
+  expect(
+    validateIntakeTiming({ kind: "choose_moment" }, 43000, 88305),
+  ).not.toBeNull();
+  expect(validateIntakeTiming({ kind: "range" }, null, null)).not.toBeNull();
 });
