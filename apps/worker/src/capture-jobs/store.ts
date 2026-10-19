@@ -1,3 +1,4 @@
+import { issuanceGuard } from "./issuance-guard";
 import { intakeClaimGuard } from "./intake-work-guard";
 import { acceptPlanResult } from "./plan";
 import { cutWireSchema, derivativeSchema } from "./cut-contract";
@@ -133,16 +134,24 @@ export async function claimJob(
   db: D1Database,
   value: unknown,
   now = Date.now(),
-  scope?: { episode: number; intakeEnabled: boolean },
+  scope?: { episode: number; intakeEnabled: boolean; issuedAfter?: number },
 ): Promise<ClaimResponse> {
   const { request_id, job_kind = "capture" } = claimSchema.parse(value);
   if (
     scope &&
     (!Number.isSafeInteger(scope.episode) ||
       scope.episode < 1 ||
-      scope.episode > 999999)
+      scope.episode > 999999 ||
+      (scope.issuedAfter !== undefined &&
+        (!Number.isSafeInteger(scope.issuedAfter) ||
+          scope.issuedAfter < 0 ||
+          scope.issuedAfter > now)))
   )
     throw conflict();
+  // Machine callers pass the authenticated grant start. Internal legacy callers
+  // may omit it; it is never accepted from the client claim body.
+  const issuanceSql =
+    scope?.issuedAfter === undefined ? "1" : issuanceGuard(scope.issuedAfter);
   const responseFor = async (encoded: string): Promise<ClaimResponse> => {
     const stored = JSON.parse(encoded) as ClaimResponse & {
       _job_kind?: string;
@@ -150,6 +159,15 @@ export async function claimJob(
     if ((stored._job_kind ?? "capture") !== job_kind) throw conflict();
     if (stored.claim && scope) {
       if (stored.claim.episode !== scope.episode) throw conflict();
+      if (
+        !(await db
+          .prepare(
+            `SELECT 1 FROM capture_jobs WHERE job_id=? AND ${issuanceSql}`,
+          )
+          .bind(stored.claim.job_id)
+          .first())
+      )
+        throw conflict();
       if (
         stored.claim.intake_work_id &&
         (!scope.intakeEnabled ||
@@ -184,7 +202,7 @@ export async function claimJob(
     throw error;
   }
   const scopeSql = scope
-    ? ` AND json_extract(request_json,'$.episode')=${scope.episode} AND ${intakeClaimGuard(scope.intakeEnabled)}`
+    ? ` AND json_extract(request_json,'$.episode')=${scope.episode} AND ${intakeClaimGuard(scope.intakeEnabled)} AND ${issuanceSql}`
     : " AND json_extract(request_json,'$.intake_work_id') IS NULL";
   const prioritySql = scope?.intakeEnabled
     ? "coalesce((SELECT CASE priority WHEN 'urgent' THEN 1 ELSE 0 END FROM intake_work_requests w WHERE w.job_id=json_extract(capture_jobs.request_json,'$.intake_work_id')),0) DESC,"
@@ -193,7 +211,7 @@ export async function claimJob(
   await db.batch([
     db
       .prepare(
-        `UPDATE capture_jobs SET state='needs_review',code='LEASE_EXPIRED',updated_at=? WHERE lease_expires_at<=? AND state IN ('running','waiting_for_episode','blocked') AND coalesce(json_extract(request_json,'$.kind'),'capture')=? ${scope ? `AND json_extract(request_json,'$.episode')=${scope.episode}` : ""}`,
+        `UPDATE capture_jobs SET state='needs_review',code='LEASE_EXPIRED',updated_at=? WHERE lease_expires_at<=? AND state IN ('running','waiting_for_episode','blocked') AND coalesce(json_extract(request_json,'$.kind'),'capture')=? ${scope ? `AND json_extract(request_json,'$.episode')=${scope.episode} AND ${issuanceSql}` : ""}`,
       )
       .bind(now, now, job_kind),
     db

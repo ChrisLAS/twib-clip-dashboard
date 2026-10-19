@@ -52,6 +52,7 @@ beforeEach(async () => {
     "0015_inventory_cut_planning.sql",
     "0016_first_pass_derivative_link.sql",
     "0017_first_pass_transition_outcome.sql",
+    "0018_intake_work_requests.sql",
   ])
     raw.exec(
       readFileSync(new URL("../migrations/" + file, import.meta.url), "utf8"),
@@ -461,4 +462,19 @@ it("plan receipt replay is denied when scope or gate is revoked", async () => {
   expect(snapshot()).toBe(before);
   env.CUT_PLANNING_ENABLED = "true";
   expect((await result(delivery)).status).toBe(200);
+});
+
+it("machine claims apply authenticated start to old capture jobs, not client input", async () => {
+  env.CAPTURE_JOBS_GRANT_OPERATIONS = "capture";
+  const start = Date.parse(env.CAPTURE_JOBS_GRANT_STARTS_AT!);
+  raw
+    .prepare("UPDATE capture_jobs SET created_at=? WHERE job_id=?")
+    .run(start - 1, captureId);
+  const response = await claim({ request_id: crypto.randomUUID() });
+  expect(response.status).toBe(200);
+  expect(((await response.json()) as ClaimResponse).claim).toBeNull();
+  expect(row(captureId)?.state).toBe("queued");
+  expect(
+    (await claim({ request_id: crypto.randomUUID(), issuedAfter: 0 })).status,
+  ).toBe(422);
 });

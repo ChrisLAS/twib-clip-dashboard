@@ -1,3 +1,4 @@
+import { jobGrantMaxMilliseconds } from "./scope";
 import { createRemoteJWKSet, errors, jwtVerify } from "jose";
 import type { Env } from "../env";
 import { HttpError } from "../errors";
@@ -111,7 +112,7 @@ export async function authenticateCaptureJobs(
     !Number.isFinite(starts) ||
     !Number.isFinite(expires) ||
     expires <= starts ||
-    expires - starts > 86400000
+    expires - starts > jobGrantMaxMilliseconds(env)
   )
     throw disabled();
   const url = new URL(request.url);

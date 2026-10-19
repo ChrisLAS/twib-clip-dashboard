@@ -196,7 +196,7 @@ it("reuse, source, episode and action grants fail closed when absent or invalid"
     { CAPTURE_JOBS_GRANT_SCOPES: "job:claim,job:claim" },
     { CAPTURE_JOBS_GRANT_EXPIRES_AT: undefined },
     { CAPTURE_JOBS_GRANT_STARTS_AT: undefined },
-    { CAPTURE_JOBS_GRANT_EXPIRES_AT: new Date(now + 86400001).toISOString() },
+    { CAPTURE_JOBS_GRANT_EXPIRES_AT: new Date(now + 604800001).toISOString() },
   ])
     await expect(
       authenticateCaptureJobs(
@@ -272,3 +272,62 @@ it("accepts an explicitly configured future exact episode without accepting wild
       ),
     ).rejects.toMatchObject({ status: 503 });
 });
+
+it.each([-1, 0, 604799999, 604800000])(
+  "seven-day job grant preserves exact time boundary %i",
+  async (offset) => {
+    const at = now + offset;
+    const config = {
+      ...env,
+      CAPTURE_JOBS_GRANT_OPERATIONS: "capture,cut",
+      CAPTURE_JOBS_GRANT_STARTS_AT: new Date(now).toISOString(),
+      CAPTURE_JOBS_GRANT_EXPIRES_AT: new Date(now + 604800000).toISOString(),
+    };
+    const check = authenticateCaptureJobs(
+      await request({
+        iat: Math.floor(at / 1000),
+        exp: Math.floor(at / 1000) + 600,
+      }),
+      config,
+      at,
+    );
+    if (offset < 0 || offset >= 604800000)
+      await expect(check).rejects.toMatchObject({ status: 403 });
+    else await expect(check).resolves.toBeUndefined();
+  },
+);
+it("rejects job grants longer than seven days by one millisecond", async () => {
+  await expect(
+    authenticateCaptureJobs(
+      await request(),
+      {
+        ...env,
+        CAPTURE_JOBS_GRANT_OPERATIONS: "capture,cut",
+        CAPTURE_JOBS_GRANT_STARTS_AT: new Date(now).toISOString(),
+        CAPTURE_JOBS_GRANT_EXPIRES_AT: new Date(now + 604800001).toISOString(),
+      },
+      now,
+    ),
+  ).rejects.toMatchObject({ status: 503 });
+});
+
+it.each(["plan", "capture,plan", "cut,plan", "capture,cut,plan"])(
+  "keeps planning grant %s capped at 24 hours",
+  async (operations) => {
+    const config = {
+      ...env,
+      CAPTURE_JOBS_GRANT_OPERATIONS: operations,
+      CAPTURE_JOBS_GRANT_STARTS_AT: new Date(now).toISOString(),
+      CAPTURE_JOBS_GRANT_EXPIRES_AT: new Date(now + 86400000).toISOString(),
+    };
+    await expect(
+      authenticateCaptureJobs(await request(), config, now),
+    ).resolves.toBeUndefined();
+    config.CAPTURE_JOBS_GRANT_EXPIRES_AT = new Date(
+      now + 86400001,
+    ).toISOString();
+    await expect(
+      authenticateCaptureJobs(await request(), config, now),
+    ).rejects.toMatchObject({ status: 503 });
+  },
+);

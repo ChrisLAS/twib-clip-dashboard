@@ -45,3 +45,13 @@ export function requireKind(env: Env, kind: JobKind): void {
       "Cut execution is not activated.",
     );
 }
+
+// Seven-day authority is restricted to the approved capture/cut operations.
+// Planning (including mixed grants) retains its original one-day ceiling.
+export function jobGrantMaxMilliseconds(env: Env): number {
+  return ["capture", "cut", "capture,cut"].includes(
+    env.CAPTURE_JOBS_GRANT_OPERATIONS ?? "",
+  )
+    ? 604800000
+    : 86400000;
+}

@@ -8,8 +8,14 @@ import {
   listIntakeWork,
   retryIntakeWork,
   advanceIntakeWork,
+  ownerRangeDispatchEnabled,
 } from "../src/capture-jobs/intake-work";
-import { claimJob, acceptResult } from "../src/capture-jobs/store";
+import {
+  claimJob,
+  acceptResult,
+  createJob,
+  retryJob,
+} from "../src/capture-jobs/store";
 import {
   inventoryEpisodeId,
   INVENTORY_SOURCE,
@@ -1018,7 +1024,9 @@ it.each([
   { CAPTURE_JOBS_GRANT_STARTS_AT: new Date(3000).toISOString() },
   { CAPTURE_JOBS_GRANT_EXPIRES_AT: new Date(2000).toISOString() },
   { CAPTURE_JOBS_GRANT_EXPIRES_AT: undefined },
-  { CAPTURE_JOBS_GRANT_EXPIRES_AT: new Date(86401001).toISOString() },
+  {
+    CAPTURE_JOBS_GRANT_EXPIRES_AT: new Date(1000 + 604800000 + 1).toISOString(),
+  },
 ])("new owner range fails closed for grant/gate %j", async (change) => {
   const f = await manualRangeFixture();
   Object.assign(env, change);
@@ -1160,4 +1168,202 @@ it("manual-range availability reflects actual cut grants, not capture-only dispa
   state = await listIntakeWork(env, "owner");
   expect(state.jobs[0].rangeDispatchEnabled).toBe(false);
   expect(state.jobs[0].rangeSelection).toEqual(f.view.rangeSelection);
+});
+
+it("prospective claims skip old roots and accept exact start, including atomic competing claims", async () => {
+  enabled();
+  intake(1, [1000, 2000]);
+  intake(2, [3000, 4000]);
+  const old = await requestIntakeWork(
+    env,
+    "intake-1",
+    { expectedRevision: 1, priority: "urgent" },
+    "owner",
+    99,
+  );
+  const fresh = await requestIntakeWork(
+    env,
+    "intake-2",
+    { expectedRevision: 1, priority: "normal" },
+    "owner",
+    100,
+  );
+  const prospective = { ...scope, issuedAfter: 100 };
+  // Serialize atomic batches while allowing concurrent request pre-reads.
+  const batch = db.batch.bind(db);
+  let queue = Promise.resolve();
+  db.batch = ((statements: D1PreparedStatement[]) => {
+    const next = queue.then(() => batch(statements));
+    queue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }) as typeof db.batch;
+  const results = await Promise.all([
+    claimJob(db, { request_id: id(81) }, 101, prospective),
+    claimJob(db, { request_id: id(82) }, 101, prospective),
+  ]);
+  expect(results.filter((r) => r.claim).map((r) => r.claim!.job_id)).toEqual([
+    fresh.jobId,
+  ]);
+  expect(
+    raw.prepare("SELECT state FROM capture_jobs WHERE job_id=?").get(old.jobId)
+      ?.state,
+  ).toBe("queued");
+});
+
+it("prospective root fence blocks delayed children from old intake and permits same-window child", async () => {
+  const { a, proof } = await captured([1000, 12000]);
+  await observe(proof);
+  env.CUT_JOBS_ENABLED = "true";
+  await advanceIntakeWork(env, a.jobId);
+  const now = Date.now();
+  const old = await claimJob(db, { request_id: id(83), job_kind: "cut" }, now, {
+    ...scope,
+    issuedAfter: 2,
+  });
+  expect(old.claim).toBeNull();
+  const fresh = await claimJob(
+    db,
+    { request_id: id(84), job_kind: "cut" },
+    now,
+    { ...scope, issuedAfter: 1 },
+  );
+  expect(fresh.claim?.intake_work_id).toBe(a.jobId);
+});
+
+it("renewed grant rejects old claim replay without changing lease; results still reconcile", async () => {
+  const { a, receipt } = await captured();
+  const before = raw
+    .prepare(
+      "SELECT state,lease_id,lease_expires_at FROM capture_jobs WHERE job_id=?",
+    )
+    .get(a.jobId);
+  await expect(
+    claimJob(db, { request_id: id(1) }, 5, { ...scope, issuedAfter: 2 }),
+  ).rejects.toMatchObject({ code: "JOB_CONFLICT" });
+  expect(
+    raw
+      .prepare(
+        "SELECT state,lease_id,lease_expires_at FROM capture_jobs WHERE job_id=?",
+      )
+      .get(a.jobId),
+  ).toEqual(before);
+  expect(await acceptResult(db, receipt, 6)).toMatchObject({ accepted: true });
+});
+
+it("prospective claim fails closed for missing root", async () => {
+  enabled();
+  intake();
+  const a = await requestIntakeWork(
+    env,
+    "intake-1",
+    { expectedRevision: 1, priority: "normal" },
+    "owner",
+    100,
+  );
+  raw
+    .prepare(
+      "UPDATE capture_jobs SET request_json=json_set(request_json,'$.intake_work_id','missing') WHERE job_id=?",
+    )
+    .run(a.jobId);
+  expect(
+    (
+      await claimJob(db, { request_id: id(85) }, 101, {
+        ...scope,
+        issuedAfter: 100,
+      })
+    ).claim,
+  ).toBeNull();
+});
+it("prospective direct capture retry retains immutable issuance and respects grant renewal", async () => {
+  const scope = { episode: 127, intakeEnabled: false, issuedAfter: 0 };
+  await createJob(
+    db,
+    {
+      job_id: id(1),
+      show: "twib",
+      episode: 127,
+      url: "https://youtu.be/abcdefghijk",
+      reported_by: "chad",
+    },
+    "owner",
+    0,
+  );
+  await claimJob(db, { request_id: id(2) }, 1, scope);
+  await retryJob(db, id(1), { retry_id: id(5) }, 8000000);
+  expect(
+    (
+      await claimJob(db, { request_id: id(6) }, 8000001, {
+        ...scope,
+        issuedAfter: 1,
+      })
+    ).claim,
+  ).toBeNull();
+  expect(
+    (await claimJob(db, { request_id: id(7) }, 8000002, scope)).claim
+      ?.operation,
+  ).toBe("retry");
+});
+
+it.each([-1, 0, 604799999, 604800000])(
+  "owner range grant accepts seven days with exclusive expiry: %i",
+  async (offset) => {
+    const f = await manualRangeFixture();
+    const start = 1000;
+    env.CAPTURE_JOBS_GRANT_OPERATIONS = "capture,cut";
+    env.CAPTURE_JOBS_GRANT_STARTS_AT = new Date(start).toISOString();
+    env.CAPTURE_JOBS_GRANT_EXPIRES_AT = new Date(
+      start + 604800000,
+    ).toISOString();
+    expect(ownerRangeDispatchEnabled(env, 128, start + offset)).toBe(
+      offset >= 0 && offset < 604800000,
+    );
+    env.CAPTURE_JOBS_GRANT_EXPIRES_AT = new Date(
+      start + 604800001,
+    ).toISOString();
+    expect(ownerRangeDispatchEnabled(env, 128, start)).toBe(false);
+    void f;
+  },
+);
+
+it("claim maintenance preserves excluded old leases and expires eligible ones", async () => {
+  const make = (n: number) => ({
+    job_id: id(n),
+    show: "twib",
+    episode: 128,
+    url: "https://youtu.be/abcdefghijk",
+    reported_by: "chad",
+  });
+  await createJob(db, make(91), "owner", 0);
+  await claimJob(db, { request_id: id(94) }, 1);
+  await createJob(db, make(92), "owner", 100);
+  await claimJob(db, { request_id: id(95) }, 101);
+  await createJob(db, make(93), "owner", 102);
+  const old = raw
+    .prepare("SELECT * FROM capture_jobs WHERE job_id=?")
+    .get(id(91));
+  const oldClaim = raw
+    .prepare("SELECT * FROM capture_job_claims WHERE request_id=?")
+    .get(id(94));
+  const fresh = await claimJob(db, { request_id: id(96) }, 8000000, {
+    episode: 128,
+    intakeEnabled: false,
+    issuedAfter: 100,
+  });
+  expect(fresh.claim?.job_id).toBe(id(93));
+  expect(
+    raw.prepare("SELECT * FROM capture_jobs WHERE job_id=?").get(id(91)),
+  ).toEqual(old);
+  expect(
+    raw
+      .prepare("SELECT * FROM capture_job_claims WHERE request_id=?")
+      .get(id(94)),
+  ).toEqual(oldClaim);
+  expect(
+    raw
+      .prepare("SELECT state,code FROM capture_jobs WHERE job_id=?")
+      .get(id(92)),
+  ).toEqual({ state: "needs_review", code: "LEASE_EXPIRED" });
 });

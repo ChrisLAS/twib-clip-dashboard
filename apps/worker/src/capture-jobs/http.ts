@@ -71,6 +71,7 @@ export async function machineJobs(request: Request, env: Env) {
       await claimJob(env.DB, claim, Date.now(), {
         episode: Number(env.CAPTURE_JOBS_GRANT_EPISODE),
         intakeEnabled: intakeWorkEnabled(env),
+        issuedAfter: Date.parse(env.CAPTURE_JOBS_GRANT_STARTS_AT!),
       }),
     );
   }

@@ -80,7 +80,8 @@ Only an unplanned first-pass request with no execution job/proposal/derivative i
 eligible. Current owner/intake/workspace/episode/parent-version bindings, native
 capture evidence and duplicate-parent checks are mandatory. New selection also
 requires enabled intake/capture/cut gates, exact source/show/episode/action and
-cut-operation grants, and a current configured grant interval of at most 24 hours.
+cut-operation grants, and a current configured grant interval of at most seven days for capture/cut-only operations. Any grant including planning
+retains the 24-hour ceiling.
 The pilot may configure a shorter window (for example two hours); selection never
 extends it. Planning and automatic-first-pass gates are irrelevant to this owner
 choice. Already-started planning must be reconciled separately.
@@ -96,3 +97,18 @@ This endpoint does not generalize the separate inventory review UI: its numeric
 inventory selector and ordinary review POST still retain the historic episode-127
 scope. Episode-128 manual range selection uses the exact intake-bound endpoint
 above. Broadening ordinary inventory review needs its own workspace-bound change.
+
+## Prospective machine claims
+
+The authenticated job grant start is also an issuance cutoff. New claims and
+claim replays require the immutable owner work request to have been created at
+or after that start. A downstream cut uses its intake root's creation time, not
+the later queue time. Direct owner capture requests use their original job
+creation time; direct cut/plan requests use their original cut request (or
+first-pass parent) creation time. Missing or malformed roots fail closed.
+
+Retries within the same grant retain eligibility. Moving the grant start forward
+intentionally excludes earlier requests and their retries, even when their
+downstream jobs were created later. This does not change result reconciliation:
+existing lease/attempt and authentication checks still govern receipts. The
+cutoff is checked in the atomic claim selection, not only a queue preflight.

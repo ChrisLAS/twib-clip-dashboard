@@ -1,3 +1,4 @@
+import { jobGrantMaxMilliseconds } from "./scope";
 import { z } from "zod";
 import type { Env } from "../env";
 import type { ManualIntake, IntakeWorkView } from "@twib/shared";
@@ -872,7 +873,7 @@ export function ownerRangeDispatchEnabled(
     !Number.isFinite(starts) ||
     !Number.isFinite(expires) ||
     expires <= starts ||
-    expires - starts > 86400000 ||
+    expires - starts > jobGrantMaxMilliseconds(env) ||
     now < starts ||
     now >= expires
   );
