@@ -1149,3 +1149,72 @@ describe("HTTP fail-closed boundary", () => {
     ).rejects.toMatchObject({ status: 415 });
   });
 });
+
+it.each([
+  "native-pinboard.synthetic.envelope.json",
+  "native-pinboard-notes.synthetic.envelope.json",
+])(
+  "accepts actual synthetic native sender envelope %s and replays without editorial approval",
+  async (fixtureName) => {
+    const envelope = JSON.parse(
+      readFileSync(
+        new URL(`./fixtures/${fixtureName}`, import.meta.url),
+        "utf8",
+      ),
+    ) as InventoryEnvelope;
+    const at = Date.parse("2026-10-19T19:00:00Z");
+    const nativeGrant: InventoryGrant = {
+      sourceId: "nomad:number-one",
+      episodeId: await inventoryEpisodeId(128),
+      episodeNumber: 128,
+      expiresAt: Date.parse("2026-10-26T15:08:09Z"),
+      scope: "inventory:write",
+      allowEditorialContext: false,
+      originHosts: [],
+      nativeIntakeContext: true,
+    };
+    const before = sqlite
+      .prepare("SELECT count(*) n FROM inventory_snapshots")
+      .get()?.n;
+    await expect(
+      acceptInventory(
+        db,
+        envelope,
+        envelope.scan_id,
+        { ...nativeGrant, nativeIntakeContext: false },
+        at,
+      ),
+    ).rejects.toMatchObject({ status: 422 });
+    expect(
+      sqlite.prepare("SELECT count(*) n FROM inventory_snapshots").get()?.n,
+    ).toBe(before);
+    const receipt = await acceptInventory(
+      db,
+      envelope,
+      envelope.scan_id,
+      nativeGrant,
+      at,
+    );
+    expect(receipt).toMatchObject({
+      stored_item_count: 1,
+      complete: false,
+      allow_deletions: false,
+    });
+    expect(
+      await acceptInventory(db, envelope, envelope.scan_id, nativeGrant, at),
+    ).toEqual(receipt);
+    expect(
+      sqlite.prepare("SELECT count(*) n FROM inventory_reviews").get()?.n,
+    ).toBe(0);
+    const stored = JSON.parse(
+      String(
+        sqlite.prepare("SELECT item_json FROM inventory_observations").get()
+          ?.item_json,
+      ),
+    );
+    expect(stored.observations).toEqual(
+      envelope.manifest.items[0].observations,
+    );
+    expect(stored.ready).toBe(false);
+  },
+);

@@ -200,6 +200,12 @@ export async function authenticateInventory(
     scope: "inventory:write",
     expiresAt: expires,
     allowEditorialContext: false,
+    ...(env.INVENTORY_NATIVE_INTAKE_ENABLED === "true" &&
+    episode === "128" &&
+    now >= Date.parse("2026-10-19T17:54:33.000Z") &&
+    now < Date.parse("2026-10-26T15:08:09.000Z")
+      ? { nativeIntakeContext: true }
+      : {}),
     originHosts: [],
   };
 }

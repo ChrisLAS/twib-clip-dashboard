@@ -512,3 +512,62 @@ describe("seven-day inventory grant boundary", () => {
     },
   );
 });
+
+describe("native-intake opt-in remains independently bounded", () => {
+  const nativeStart = Date.parse("2026-10-19T17:54:33Z"),
+    nativeEnd = Date.parse("2026-10-26T15:08:09Z");
+  it("grants only the explicit episode128 capability without broad editorial rights", async () => {
+    env.INVENTORY_GRANT_EPISODE_NUMBER = "128";
+    env.INVENTORY_GRANT_STARTS_AT = "2026-10-19T15:08:09Z";
+    env.INVENTORY_GRANT_EXPIRES_AT = "2026-10-26T15:08:09Z";
+    for (const flag of [undefined, "false", "TRUE", "true"]) {
+      env.INVENTORY_NATIVE_INTAKE_ENABLED = flag;
+      const jwt = await token({
+        iat: nativeStart / 1000,
+        exp: nativeStart / 1000 + 900,
+      });
+      const grant = await authenticateInventory(request(jwt), env, nativeStart);
+      expect(grant.nativeIntakeContext).toBe(
+        flag === "true" ? true : undefined,
+      );
+      expect(grant.allowEditorialContext).toBe(false);
+      expect(grant.originHosts).toEqual([]);
+    }
+    env.INVENTORY_GRANT_EPISODE_NUMBER = "127";
+    const grant = await authenticateInventory(
+      request(
+        await token({ iat: nativeStart / 1000, exp: nativeStart / 1000 + 900 }),
+      ),
+      env,
+      nativeStart,
+    );
+    expect(grant.nativeIntakeContext).toBeUndefined();
+  });
+  it("does not extend either the fixed native window or the underlying inventory window", async () => {
+    env.INVENTORY_GRANT_EPISODE_NUMBER = "128";
+    env.INVENTORY_NATIVE_INTAKE_ENABLED = "true";
+    env.INVENTORY_GRANT_STARTS_AT = new Date(nativeStart - 1).toISOString();
+    env.INVENTORY_GRANT_EXPIRES_AT = new Date(nativeEnd + 1).toISOString();
+    for (const at of [nativeStart - 1, nativeStart, nativeEnd - 1, nativeEnd]) {
+      const sec = Math.floor(at / 1000),
+        jwt = await token({ iat: sec, exp: sec + 900 });
+      const grant = await authenticateInventory(request(jwt), env, at);
+      expect(grant.nativeIntakeContext).toBe(
+        at >= nativeStart && at < nativeEnd ? true : undefined,
+      );
+    }
+    env.INVENTORY_GRANT_EXPIRES_AT = new Date(nativeStart).toISOString();
+    await expect(
+      authenticateInventory(
+        request(
+          await token({
+            iat: nativeStart / 1000,
+            exp: nativeStart / 1000 + 900,
+          }),
+        ),
+        env,
+        nativeStart,
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+});

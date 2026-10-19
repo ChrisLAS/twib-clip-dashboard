@@ -20,6 +20,7 @@ export interface Env {
   CAPTURE_JOBS_GRANT_OPERATIONS?: string;
   // Private activation config only; intentionally absent from tracked wrangler vars.
   INVENTORY_INGEST_ENABLED?: string;
+  INVENTORY_NATIVE_INTAKE_ENABLED?: string;
   INVENTORY_APP_ORIGIN?: string;
   INVENTORY_ACCESS_TEAM_DOMAIN?: string;
   INVENTORY_ACCESS_AUD?: string;

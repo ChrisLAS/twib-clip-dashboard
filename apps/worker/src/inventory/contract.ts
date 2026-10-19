@@ -67,6 +67,7 @@ export interface InventoryGrant {
   expiresAt: number;
   scope: "inventory:write";
   allowEditorialContext: boolean;
+  nativeIntakeContext?: boolean;
   originHosts: readonly string[];
 }
 const invalid = (code = "INVENTORY_INVALID") =>
@@ -274,6 +275,59 @@ export async function validateInventory(
     if (!/^[a-z_]+(?::[a-f0-9]{16})?$/.test(warning))
       throw invalid("INVENTORY_PRIVACY_REJECTED");
   for (const row of manifest.coverage) safeRef(row.artifact);
+  // Capability is server-derived, never a request field. The marker only selects a
+  // stricter native subset contract; it does not prove local Pinboard provenance.
+  const nativeContext =
+    grant.nativeIntakeContext === true &&
+    grant.episodeNumber === 128 &&
+    now >= Date.parse("2026-10-19T17:54:33.000Z") &&
+    now < Date.parse("2026-10-26T15:08:09.000Z") &&
+    manifest.warnings.includes("native_pinboard_subset");
+  if (
+    nativeContext &&
+    (manifest.snapshot.complete ||
+      manifest.snapshot.allow_deletions ||
+      manifest.coverage.length ||
+      manifest.items.some(
+        (item) =>
+          item.kind !== "media" ||
+          !item.media?.present ||
+          !item.producer_record?.clip_id ||
+          item.producer_record.record_kind !== "processing-history" ||
+          item.producer_record.parent_clip_id != null ||
+          item.producer_record.manual_derivative != null ||
+          !["captured_observed", "unverified"].includes(
+            item.processing_status,
+          ) ||
+          item.observations.some(
+            (observation) =>
+              Object.keys(observation.timestamps).length > 0 ||
+              Object.keys(observation).some(
+                (key) =>
+                  !["artifact", "status", "context", "timestamps"].includes(
+                    key,
+                  ),
+              ),
+          ),
+      ))
+  )
+    throw invalid("INVENTORY_NATIVE_INTAKE_SHAPE");
+  const contentGrant: InventoryGrant = nativeContext
+    ? {
+        ...grant,
+        allowEditorialContext: true,
+        originHosts: [
+          "youtu.be",
+          "youtube.com",
+          "www.youtube.com",
+          "m.youtube.com",
+          "x.com",
+          "www.x.com",
+          "twitter.com",
+          "www.twitter.com",
+        ],
+      }
+    : grant;
   const ids = new Set<string>();
   for (const item of manifest.items) {
     if (
@@ -341,9 +395,17 @@ export async function validateInventory(
       throw invalid();
     for (const observation of item.observations) {
       safeRef(observation.artifact);
-      for (const text of Object.values(observation.context)) prose(text, grant);
+      if (
+        nativeContext &&
+        Object.keys(observation.context).some(
+          (key) => !["title", "operator_note", "extended"].includes(key),
+        )
+      )
+        throw invalid("INVENTORY_NATIVE_INTAKE_CONTEXT");
+      for (const text of Object.values(observation.context))
+        prose(text, contentGrant);
     }
-    for (const origin of item.origins) publicUrl(origin.url, grant);
+    for (const origin of item.origins) publicUrl(origin.url, contentGrant);
     for (const evidence of item.capture_evidence ?? [])
       safeRef(evidence.artifact);
   }

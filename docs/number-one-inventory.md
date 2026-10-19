@@ -187,3 +187,32 @@ Local verification on 2026-10-12 additionally exercised the receiver in actual
 workerd/D1 through a synthetic test-only harness: standalone schema validation,
 transactional persistence, original receipt replay and digest conflict rejection.
 That harness is not shipped as a production route.
+
+## Bounded native Pinboard intake opt-in
+
+`INVENTORY_NATIVE_INTAKE_ENABLED=true` adds a separate, default-closed native
+intake context capability to the existing authenticated inventory grant. It is
+limited to episode 128 and the intersection of that grant with
+2026-10-19T17:54:33Z inclusive through 2026-10-26T15:08:09Z exclusive. It creates
+no new identity, audience, endpoint, credential, or access policy. Normal
+metadata-only owner-request snapshots continue to work with the flag off or on.
+
+The receiver selects the stricter native shape only for a manifest carrying the
+`native_pinboard_subset` warning marker. It requires partial/no-deletion native
+media with present files, native clip IDs, no parent/derivative, empty coverage
+and observation timestamps, and unverified or captured-observed status. Only
+`title`, `operator_note`, and `extended` context keys are accepted. The marker is
+not proof of Pinboard provenance: the separately reviewed native sender must
+bind the original bookmarked URL, approval window, native history and verified
+local file before disclosure. Candidate and owner-work snapshots cannot gain
+context permission merely by sharing the existing service identity.
+
+Exact public origin hosts are youtu.be, youtube.com, www.youtube.com,
+m.youtube.com, x.com, www.x.com, twitter.com, and www.twitter.com. Existing URL
+and prose privacy checks remain unchanged: canonicalize YouTube watch links to
+`https://www.youtube.com/watch?v=VIDEO_ID`; the query-string exception does not
+apply to other aliases. Credentials, tracking queries, fragments, private paths,
+recognizable secrets, overlong text and unapproved hosts remain rejected. Raw
+notes stay local; the sender reports `native_note_links_omitted` or
+`native_note_links_normalized` when needed. No schema or database migration is
+required, and metadata never confers editorial approval.
