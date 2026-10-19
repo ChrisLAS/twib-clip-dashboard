@@ -49,7 +49,7 @@ approved. None is present in tracked Wrangler configuration:
   decimal integer from 1 through 999999. Required even for the historic 127 pilot;
   missing, zero, padded, signed, fractional, list or wildcard values stay disabled.
 - `INVENTORY_GRANT_STARTS_AT`, `INVENTORY_GRANT_EXPIRES_AT`: fixed absolute dates;
-  expiry is after start and at most 24 hours later. Never recompute/extend per request.
+  expiry is after start and at most seven days (604800000 milliseconds) later. Never recompute/extend per request.
 
 Existing owner `ACCESS_AUD` must remain configured. The adapter does not read or
 store the service Client Secret. No new application signing secret is needed.
@@ -81,7 +81,7 @@ Receipts are bounded metadata (tested below 4 KiB), private/no-store. No media,
 readiness promotion, delete, shell, job, scheduling or workspace remapping is added.
 
 Receiver inventory has no automatic TTL or cleanup. Stored history/receipts stay
-retained pending a separately approved retention policy; 24 hours limits authority,
+retained pending a separately approved retention policy; seven days limits inventory authority,
 not data lifetime. No deletion or cleanup is included in this pilot.
 
 The one-real-snapshot pilot is an operational bound on the manual sender, not a

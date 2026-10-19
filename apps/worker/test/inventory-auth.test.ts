@@ -158,7 +158,7 @@ describe("disabled-by-default inventory machine authentication", () => {
     ["INVENTORY_APP_ORIGIN", "https://inventory.example.com/path"],
     ["INVENTORY_ACCESS_TEAM_DOMAIN", "attacker.example.com"],
     ["INVENTORY_ACCESS_AUD", "b".repeat(64)],
-    ["INVENTORY_GRANT_EXPIRES_AT", new Date(now + 86400000).toISOString()],
+    ["INVENTORY_GRANT_EXPIRES_AT", new Date(now + 604800000).toISOString()],
   ])("invalid config %s=%s stays closed", async (field, value) => {
     (env as unknown as Record<string, string>)[field] = value;
     await denied(request(), 503);
@@ -468,6 +468,47 @@ describe("exact single-audience representations", () => {
       expect(req.bodyUsed).toBe(false);
       expect(db.prepare).not.toHaveBeenCalled();
       expect(db.batch).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("seven-day inventory grant boundary", () => {
+  const lifetime = 604800000;
+  it("accepts exactly seven days without extending expiry", async () => {
+    env.INVENTORY_GRANT_STARTS_AT = new Date(now).toISOString();
+    env.INVENTORY_GRANT_EXPIRES_AT = new Date(now + lifetime).toISOString();
+    const grant = await authenticateInventory(request(await token()), env, now);
+    expect(grant.expiresAt).toBe(now + lifetime);
+  });
+  it("rejects seven days plus one millisecond before consuming a body", async () => {
+    env.INVENTORY_GRANT_STARTS_AT = new Date(now).toISOString();
+    env.INVENTORY_GRANT_EXPIRES_AT = new Date(now + lifetime + 1).toISOString();
+    const req = request(await token());
+    await denied(req, 503);
+    expect(req.bodyUsed).toBe(false);
+  });
+  it.each([-1, 0, 604799999, 604800000])(
+    "preserves start and expiry boundary at offset %i",
+    async (offset) => {
+      env.INVENTORY_GRANT_STARTS_AT = new Date(now).toISOString();
+      env.INVENTORY_GRANT_EXPIRES_AT = new Date(now + lifetime).toISOString();
+      const at = now + offset;
+      const jwt = await token({
+        iat: Math.floor(at / 1000),
+        exp: Math.floor(at / 1000) + 900,
+      });
+      const result = authenticateInventory(request(jwt), env, at);
+      if (offset < 0 || offset >= lifetime)
+        await expect(result).rejects.toMatchObject({
+          status: 403,
+          code: "INVENTORY_SCOPE_DENIED",
+        });
+      else
+        await expect(result).resolves.toMatchObject({
+          expiresAt: now + lifetime,
+          episodeNumber: 127,
+        });
+      expect(db.prepare).not.toHaveBeenCalled();
     },
   );
 });

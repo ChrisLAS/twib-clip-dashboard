@@ -100,7 +100,7 @@ export async function authenticateInventory(
     !Number.isFinite(starts) ||
     !Number.isFinite(expires) ||
     expires <= starts ||
-    expires - starts > 86400000
+    expires - starts > 604800000
   )
     throw disabled();
   const url = new URL(request.url);
