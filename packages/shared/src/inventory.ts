@@ -173,6 +173,7 @@ export interface InventoryReadItem {
   };
   cutRequests?: InventoryCutRequest[];
   identityConflict?: boolean;
+  sourceProofUnavailable?: boolean;
   folder?: string;
   filename?: string;
   firstObservedAt?: string | null;

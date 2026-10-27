@@ -1,3 +1,4 @@
+import { jobSourceProofCurrentSql } from "../inventory/freshness";
 import { issuanceGuard } from "./issuance-guard";
 import { intakeClaimGuard } from "./intake-work-guard";
 import { acceptPlanResult } from "./plan";
@@ -157,6 +158,17 @@ export async function claimJob(
       _job_kind?: string;
     };
     if ((stored._job_kind ?? "capture") !== job_kind) throw conflict();
+    if (
+      stored.claim &&
+      job_kind !== "capture" &&
+      !(await db
+        .prepare(
+          `SELECT 1 FROM capture_jobs WHERE job_id=? AND ${jobSourceProofCurrentSql()}`,
+        )
+        .bind(stored.claim.job_id)
+        .first())
+    )
+      throw conflict();
     if (stored.claim && scope) {
       if (stored.claim.episode !== scope.episode) throw conflict();
       if (
@@ -216,7 +228,7 @@ export async function claimJob(
       .bind(now, now, job_kind),
     db
       .prepare(
-        `UPDATE capture_jobs SET state='running',lease_id=?,lease_expires_at=?,updated_at=? WHERE job_id=(SELECT job_id FROM capture_jobs WHERE state='queued' AND coalesce(json_extract(request_json,'$.kind'),'capture')=? ${scopeSql} ORDER BY ${prioritySql} created_at,job_id LIMIT 1) AND state='queued' AND NOT EXISTS(SELECT 1 FROM capture_job_claims WHERE request_id=?) AND NOT EXISTS(SELECT 1 FROM capture_jobs WHERE lease_id=?)`,
+        `UPDATE capture_jobs SET state='running',lease_id=?,lease_expires_at=?,updated_at=? WHERE job_id=(SELECT job_id FROM capture_jobs WHERE state='queued' AND ${job_kind === "capture" ? "1" : jobSourceProofCurrentSql()} AND coalesce(json_extract(request_json,'$.kind'),'capture')=? ${scopeSql} ORDER BY ${prioritySql} created_at,job_id LIMIT 1) AND state='queued' AND NOT EXISTS(SELECT 1 FROM capture_job_claims WHERE request_id=?) AND NOT EXISTS(SELECT 1 FROM capture_jobs WHERE lease_id=?)`,
       )
       .bind(request_id, now + 7200000, now, job_kind, request_id, request_id),
     db

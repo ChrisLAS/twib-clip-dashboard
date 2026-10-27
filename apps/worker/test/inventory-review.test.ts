@@ -119,11 +119,17 @@ async function accept(
   items: InventoryItem[],
   time = new Date(now + sequence * 60000).toISOString(),
   episodeNumber = 127,
+  warnings?: string[],
 ) {
   const manifest = structuredClone(template);
   manifest.episode.number = episodeNumber;
   manifest.episode.id = await inventoryEpisodeId(episodeNumber);
   manifest.items = items;
+  if (warnings) {
+    manifest.warnings = warnings;
+    manifest.coverage = [];
+    manifest.snapshot.complete = false;
+  }
   manifest.observed_at = time;
   manifest.scan_finished_at = time;
   manifest.idempotency_digest = "sha256:" + (await semanticHash(manifest));
@@ -380,6 +386,332 @@ it("existing producer UID is reused; legacy overlay survives later producer meta
     producer_key: "number-one:n1-layout",
   });
 });
+it("stable item anchors preserve reviews, lineage and immutable cut history through repeated moves", async () => {
+  const item = media(1, "new-review/original.mp4");
+  item.producer_record = {
+    clip_id: "native-parent",
+    record_kind: "processing-history",
+    first_seen_at: null,
+    source_signature: null,
+    parent_clip_id: "older-source",
+  };
+  await accept([item]);
+  const saved = await save(item, "cut_down", 0, {
+    cutSpec: { kind: "range", startSeconds: 2, endSeconds: 20 },
+  });
+  const requestId = saved.cutRequestId!;
+  const originalRequest = (await readCut(db, requestId))!.request_json;
+  const originalObservation = sqlite
+    .prepare(
+      "SELECT item_json FROM inventory_observations ORDER BY sequence LIMIT 1",
+    )
+    .get()!.item_json;
+  const originalReview = sqlite
+    .prepare("SELECT * FROM inventory_reviews")
+    .get();
+  for (const ref of [
+    "01-ordered.mp4",
+    "50-UPDATES/02-topic.mp4",
+    "pre-show/final.mp4",
+  ]) {
+    const moved = structuredClone(item);
+    moved.media!.ref = ref;
+    await accept([moved]);
+    const view = await listInventory(db, episode);
+    expect(view.items).toHaveLength(1);
+    expect(view.items[0].id).toBe(item.id);
+    expect(view.items[0].producerRecord?.parent_clip_id).toBe("older-source");
+    expect(view.items[0].review).toMatchObject({
+      effectiveStatus: "cut_down",
+      notes: "Persistent private note",
+      revision: 1,
+    });
+    expect(
+      (await attachCuts(db, [moved], 127)).map((cut) => cut.requestId),
+    ).toEqual([requestId]);
+    expect((await readCut(db, requestId))!.request_json).toBe(originalRequest);
+    await expect(
+      enqueueCut(db, requestId, "synthetic-owner", now),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(sqlite.prepare("SELECT * FROM inventory_reviews").get()).toEqual(
+      originalReview,
+    );
+  }
+  expect(
+    sqlite.prepare("SELECT count(*) n FROM inventory_items").get()!.n,
+  ).toBe(1);
+  expect(
+    sqlite.prepare("SELECT count(*) n FROM inventory_observations").get()!.n,
+  ).toBe(4);
+  expect(
+    sqlite
+      .prepare(
+        "SELECT item_json FROM inventory_observations ORDER BY sequence LIMIT 1",
+      )
+      .get()!.item_json,
+  ).toBe(originalObservation);
+});
+it("lost native identity invalidates an approval even with the same version metadata", async () => {
+  const item = media(1, "original.mp4");
+  item.producer_record = {
+    clip_id: "native-parent",
+    record_kind: "processing-history",
+    first_seen_at: null,
+    source_signature: null,
+    parent_clip_id: null,
+  };
+  await accept([item]);
+  await save(item);
+  const replaced = structuredClone(item);
+  delete replaced.producer_record;
+  expect(await inventoryVersion(replaced)).toBe(await inventoryVersion(item));
+  await accept([replaced]);
+  const view = await listInventory(db, episode);
+  expect(view.items[0].review).toMatchObject({
+    status: "approved",
+    effectiveStatus: "unreviewed",
+    changed: true,
+    notes: "Persistent private note",
+  });
+  expect(view.items[0].identityConflict).toBe(true);
+  await expect(save(replaced, "approved", 1)).rejects.toMatchObject({
+    status: 409,
+  });
+});
+async function invalidateSource() {
+  return accept([], undefined, 127, ["native_proof_unavailable"]);
+}
+it("legacy overlay adoption cannot retain approval after native proof disappears", async () => {
+  const item = media(1, "original.mp4");
+  await accept([item]);
+  await save(item);
+  const legacy = sqlite.prepare("SELECT * FROM inventory_reviews").get();
+  const adopted = structuredClone(item);
+  adopted.producer_record = {
+    clip_id: "native-existing",
+    record_kind: "processing-history",
+    first_seen_at: null,
+    source_signature: null,
+    parent_clip_id: null,
+  };
+  await accept([adopted]);
+  expect(
+    (await listInventory(db, episode)).items[0].review?.effectiveStatus,
+  ).toBe("approved");
+  await accept([item]);
+  expect(
+    (await listInventory(db, episode)).items[0].review?.effectiveStatus,
+  ).toBe("unreviewed");
+  expect((await listInventory(db, episode)).items[0].identityConflict).toBe(
+    true,
+  );
+  await expect(save(item, "approved", 1)).rejects.toMatchObject({
+    status: 409,
+  });
+  expect(sqlite.prepare("SELECT * FROM inventory_reviews").get()).toEqual(
+    legacy,
+  );
+});
+it("a legacy overlay cannot be rebound from its adopted native identity to another", async () => {
+  const item = media(1, "source.mp4");
+  await accept([item]);
+  await save(item);
+  const legacy = sqlite.prepare("SELECT * FROM inventory_reviews").get();
+  item.producer_record = {
+    clip_id: "native-A",
+    record_kind: "processing-history",
+    first_seen_at: null,
+    source_signature: null,
+    parent_clip_id: null,
+  };
+  await accept([item]);
+  const changed = structuredClone(item);
+  changed.producer_record!.clip_id = "native-B";
+  expect(await inventoryVersion(changed)).toBe(await inventoryVersion(item));
+  await accept([changed]);
+  expect(
+    (await listInventory(db, episode)).items[0].review?.effectiveStatus,
+  ).toBe("unreviewed");
+  expect((await listInventory(db, episode)).items[0].identityConflict).toBe(
+    true,
+  );
+  await expect(save(changed, "approved", 1)).rejects.toMatchObject({
+    status: 409,
+  });
+  expect(sqlite.prepare("SELECT * FROM inventory_reviews").get()).toEqual(
+    legacy,
+  );
+});
+it("negative source marker pauses old approvals and restores only freshly observed items", async () => {
+  const a = media(1, "a.mp4"),
+    b = media(2, "b.mp4");
+  for (const [index, item] of [a, b].entries())
+    item.producer_record = {
+      clip_id: "verified-" + index,
+      record_kind: "processing-history",
+      first_seen_at: null,
+      source_signature: null,
+      parent_clip_id: null,
+    };
+  await accept([a, b]);
+  await save(a);
+  await save(b);
+  const reviews = sqlite
+    .prepare("SELECT * FROM inventory_reviews ORDER BY item_id")
+    .all();
+  await invalidateSource();
+  let view = await listInventory(db, episode);
+  expect(
+    view.items.every(
+      (i) =>
+        i.sourceProofUnavailable && i.review?.effectiveStatus === "unreviewed",
+    ),
+  ).toBe(true);
+  expect(
+    (await listInventory(db, episode, null, { review: "approved" })).items,
+  ).toHaveLength(0);
+  await expect(save(a, "approved", 1)).rejects.toMatchObject({
+    code: "INVENTORY_SOURCE_PROOF_UNAVAILABLE",
+  });
+  await accept([]); // A later empty snapshot cannot restore any item.
+  expect(
+    (await listInventory(db, episode)).items.every(
+      (i) => i.sourceProofUnavailable,
+    ),
+  ).toBe(true);
+  await accept([a]);
+  view = await listInventory(db, episode);
+  expect(view.items.find((i) => i.id === a.id)?.review?.effectiveStatus).toBe(
+    "approved",
+  );
+  expect(view.items.find((i) => i.id === b.id)?.review?.effectiveStatus).toBe(
+    "unreviewed",
+  );
+  expect(
+    sqlite.prepare("SELECT * FROM inventory_reviews ORDER BY item_id").all(),
+  ).toEqual(reviews);
+});
+it("source invalidation blocks cut enqueue, queued claims, lease replay and retries", async () => {
+  const { claimJob, acceptResult } = await import("../src/capture-jobs/store");
+  const item = media(1, "source.mp4");
+  item.producer_record = {
+    clip_id: "native-source",
+    record_kind: "processing-history",
+    first_seen_at: null,
+    source_signature: null,
+    parent_clip_id: null,
+  };
+  await accept([item]);
+  const saved = await save(item, "cut_down", 0, {
+    cutSpec: { kind: "range", startSeconds: 2, endSeconds: 20 },
+  });
+  const id = saved.cutRequestId!;
+  await enqueueCut(db, id, "synthetic-owner", now);
+  const lease = crypto.randomUUID();
+  const claim = await claimJob(db, { request_id: lease, job_kind: "cut" }, now);
+  expect(claim.claim?.job_id).toBe(id);
+  await invalidateSource();
+  await expect(
+    claimJob(db, { request_id: lease, job_kind: "cut" }, now),
+  ).rejects.toMatchObject({ status: 409 });
+  await acceptResult(
+    db,
+    {
+      delivery_id: crypto.randomUUID(),
+      job_id: id,
+      lease_id: lease,
+      state: "needs_review",
+      attempt: 1,
+      code: "CUT_FAILED_FIXTURE",
+    },
+    now + 1,
+  );
+  await expect(
+    retryCut(db, id, "synthetic-owner", crypto.randomUUID(), now + 2),
+  ).rejects.toMatchObject({ status: 409 });
+  sqlite.prepare("UPDATE capture_jobs SET state='queued'").run();
+  const unavailable = structuredClone(item);
+  delete unavailable.producer_record;
+  delete unavailable.capture_evidence;
+  unavailable.processing_status = "unverified";
+  await accept([unavailable]);
+  expect(
+    (await listInventory(db, episode)).items[0].sourceProofUnavailable,
+  ).toBe(true);
+  await expect(
+    claimJob(db, { request_id: lease, job_kind: "cut" }, now + 3),
+  ).rejects.toMatchObject({ status: 409 });
+  expect(
+    (
+      await claimJob(
+        db,
+        { request_id: crypto.randomUUID(), job_kind: "cut" },
+        now + 3,
+      )
+    ).claim,
+  ).toBeNull();
+  const wrong = structuredClone(item);
+  wrong.capture_evidence![0].producer_sha256 = "b".repeat(64);
+  await accept([wrong]);
+  expect(
+    (
+      await claimJob(
+        db,
+        { request_id: crypto.randomUUID(), job_kind: "cut" },
+        now + 4,
+      )
+    ).claim,
+  ).toBeNull();
+  await accept([item]);
+  expect(
+    (
+      await claimJob(
+        db,
+        { request_id: crypto.randomUUID(), job_kind: "cut" },
+        now + 5,
+      )
+    ).claim?.job_id,
+  ).toBe(id);
+});
+it.each(["review", "enqueue"])(
+  "source invalidation between %s preflight and transaction blocks the write",
+  async (kind) => {
+    const item = media(1, "source.mp4");
+    item.producer_record = {
+      clip_id: "native-source",
+      record_kind: "processing-history",
+      first_seen_at: null,
+      source_signature: null,
+      parent_clip_id: null,
+    };
+    await accept([item]);
+    let requestId: string | undefined;
+    if (kind === "enqueue")
+      requestId = (
+        await save(item, "cut_down", 0, {
+          cutSpec: { kind: "range", startSeconds: 2, endSeconds: 20 },
+        })
+      ).cutRequestId;
+    const original = db.batch.bind(db);
+    let changed = false;
+    db.batch = (async (statements) => {
+      if (!changed) {
+        changed = true;
+        await invalidateSource();
+      }
+      return original(statements);
+    }) as typeof db.batch;
+    if (kind === "review")
+      await expect(save(item)).rejects.toMatchObject({ status: 409 });
+    else
+      await expect(
+        enqueueCut(db, requestId!, "synthetic-owner", now),
+      ).rejects.toMatchObject({ status: 409 });
+    expect(sqlite.prepare("SELECT count(*) n FROM capture_jobs").get()?.n).toBe(
+      0,
+    );
+  },
+);
 it("ambiguous producer IDs are never merged or approved implicitly", async () => {
   const a = media(1, "a.mp4"),
     b = media(2, "b.mp4");
@@ -826,6 +1158,7 @@ it.each([
   "review",
   "expired",
   "source-hash",
+  "source-proof",
   "request-hash",
   "range",
   "lease",
@@ -837,6 +1170,7 @@ it.each([
     await accept([item]);
   }
   if (reason === "review") await save(item, "rejected", 1);
+  if (reason === "source-proof") await invalidateSource();
   if (reason === "source-hash") result.proposal.sourceSha256 = "e".repeat(64);
   if (reason === "request-hash")
     result.proposal.requestRevision = "e".repeat(64);
@@ -953,7 +1287,7 @@ it.each(["cut", "plan"])(
     expect(await transitionFirstPass(env, id, now + 2)).toBeNull();
   },
 );
-it.each(["source", "review", "race"])(
+it.each(["source", "review", "race", "source-proof"])(
   "automatic transition rejects %s changes after plan receipt",
   async (reason) => {
     const { acceptResult } = await import("../src/capture-jobs/store");
@@ -966,6 +1300,7 @@ it.each(["source", "review", "race"])(
       await accept([item]);
     }
     if (reason === "review") await save(item, "rejected", 1);
+    if (reason === "source-proof") await invalidateSource();
     if (reason === "race")
       env.DB = {
         ...db,

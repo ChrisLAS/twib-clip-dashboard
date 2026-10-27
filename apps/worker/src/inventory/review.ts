@@ -1,3 +1,4 @@
+import { assertSourceProofCurrent, sourceProofCurrentSql } from "./freshness";
 import { cutSpecSchema, preparedCut, cutInsert } from "../capture-jobs/cut";
 import { z } from "zod";
 import type { InventoryReview, InventoryReviewInput } from "@twib/shared";
@@ -115,6 +116,19 @@ export async function reviewFor(
   episode: string,
   item: InventoryItem,
 ): Promise<ReviewRow | null> {
+  await assertSourceProofCurrent(db, episode, item.id);
+  const adopted = await db
+    .prepare(
+      "SELECT coalesce(json_extract(item_json,'$.producer_record.clip_uid'),json_extract(item_json,'$.producer_record.clip_id')) identity FROM inventory_observations WHERE source_id=? AND episode_id=? AND item_id=? AND json_extract(item_json,'$.producer_record') IS NOT NULL ORDER BY sequence LIMIT 1",
+    )
+    .bind(INVENTORY_SOURCE, episode, item.id)
+    .first<{ identity: string }>();
+  if (adopted && "number-one:" + adopted.identity !== producerKey(item))
+    throw new HttpError(
+      409,
+      "INVENTORY_REVIEW_IDENTITY_CONFLICT",
+      "Previously observed source identity changed or is unavailable. Saved reviews were retained.",
+    );
   if (item.producer_record) {
     const duplicate = await db
       .prepare(
@@ -147,11 +161,7 @@ export async function reviewFor(
       "Existing producer identities need reconciliation; no reviews were merged.",
     );
   const row = rows.results[0] ?? null;
-  if (
-    row?.producer_key &&
-    producerKey(item) &&
-    row.producer_key !== producerKey(item)
-  )
+  if (row?.producer_key && row.producer_key !== producerKey(item))
     throw new HttpError(
       409,
       "INVENTORY_REVIEW_IDENTITY_CONFLICT",
@@ -256,7 +266,7 @@ export async function saveInventoryReview(
     db
       .prepare(
         `INSERT OR IGNORE INTO inventory_review_operations(operation_id,owner,request_hash,response_json)
-      SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM inventory_observations o WHERE o.source_id=? AND o.episode_id=? AND o.item_id=? AND o.receipt_id=? AND o.sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations newer WHERE newer.source_id=o.source_id AND newer.episode_id=o.episode_id AND newer.item_id=o.item_id AND newer.sequence>o.sequence))
+      SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM inventory_observations o WHERE o.source_id=? AND o.episode_id=? AND o.item_id=? AND o.receipt_id=? AND o.sequence=? AND ${sourceProofCurrentSql()} AND NOT EXISTS(SELECT 1 FROM inventory_observations newer WHERE newer.source_id=o.source_id AND newer.episode_id=o.episode_id AND newer.item_id=o.item_id AND newer.sequence>o.sequence))
       AND NOT EXISTS(SELECT 1 FROM inventory_observations duplicate WHERE duplicate.source_id=? AND duplicate.episode_id=? AND duplicate.item_id<>? AND coalesce(json_extract(duplicate.item_json,'$.producer_record.clip_uid'),json_extract(duplicate.item_json,'$.producer_record.clip_id'))=? AND json_extract(duplicate.item_json,'$.media.present')=1 AND duplicate.sequence=(SELECT max(latest.sequence) FROM inventory_observations latest WHERE latest.source_id=duplicate.source_id AND latest.episode_id=duplicate.episode_id AND latest.item_id=duplicate.item_id))
       AND coalesce((SELECT revision FROM inventory_reviews WHERE source_id=? AND episode_id=? AND review_key=?),0)=?`,
       )

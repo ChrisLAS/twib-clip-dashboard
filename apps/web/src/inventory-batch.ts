@@ -16,6 +16,7 @@ export function batchEligible(record: InventoryReadItem) {
     !batchSizeIssue(record) &&
     !!record.review &&
     !record.identityConflict &&
+    !record.sourceProofUnavailable &&
     !record.conflictingLatestObservations &&
     !record.variantsTruncated &&
     !!media?.present &&

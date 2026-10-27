@@ -47,6 +47,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   raw = new DatabaseSync(":memory:");
   for (const file of [
+    "0011_number_one_inventory.sql",
     "0012_capture_jobs.sql",
     "0014_inventory_cut_requests.sql",
     "0015_inventory_cut_planning.sql",

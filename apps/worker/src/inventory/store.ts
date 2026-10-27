@@ -1,3 +1,4 @@
+import { sourceProofCurrentSql } from "./freshness";
 import { manualDerivativeRelations } from "./manual-derivative";
 import {
   inventoryVersion,
@@ -253,6 +254,8 @@ interface InventoryListOptions {
 // Snapshot absence never removes an item, and source clocks never order it.
 const latestItemsSql = `
   SELECT i.item_id,o.receipt_id,o.observed_ms,o.sequence,o.item_json,
+    NOT (${sourceProofCurrentSql("o")}) source_proof_unavailable,
+    (EXISTS(SELECT 1 FROM inventory_observations prior WHERE prior.source_id=i.source_id AND prior.episode_id=i.episode_id AND prior.item_id=i.item_id AND prior.sequence<o.sequence AND json_extract(prior.item_json,'$.producer_record') IS NOT NULL) AND coalesce(json_extract(o.item_json,'$.producer_record.clip_uid'),json_extract(o.item_json,'$.producer_record.clip_id')) IS NOT (SELECT coalesce(json_extract(prior.item_json,'$.producer_record.clip_uid'),json_extract(prior.item_json,'$.producer_record.clip_id')) FROM inventory_observations prior WHERE prior.source_id=i.source_id AND prior.episode_id=i.episode_id AND prior.item_id=i.item_id AND json_extract(prior.item_json,'$.producer_record') IS NOT NULL ORDER BY prior.sequence LIMIT 1)) lost_native_identity,
     (SELECT min(old.observed_ms) FROM inventory_observations old WHERE old.source_id=i.source_id AND old.episode_id=i.episode_id AND old.item_id=i.item_id AND old.sequence<=(SELECT watermark FROM limits)) first_observed_ms,
     (SELECT min(s.accepted_at) FROM inventory_observations old JOIN inventory_snapshots s ON s.receipt_id=old.receipt_id WHERE old.source_id=i.source_id AND old.episode_id=i.episode_id AND old.item_id=i.item_id AND old.sequence<=(SELECT watermark FROM limits)) first_received_at
   FROM inventory_items i JOIN inventory_observations o
@@ -289,9 +292,9 @@ const namedLatestItemsSql = `SELECT g.*,${refSql} media_ref,${baseSql} filename,
   sum(CASE WHEN json_extract(g.item_json,'$.media.present')=1 THEN 1 ELSE 0 END) OVER(PARTITION BY coalesce(json_extract(g.item_json,'$.producer_record.clip_uid'),json_extract(g.item_json,'$.producer_record.clip_id'))) producer_count
   FROM (${groupedLatestItemsSql}) g`;
 const reviewedLatestItemsSql = `SELECT n.*,
-  CASE WHEN r.review_key IS NULL OR r.version_basis<>n.version_basis OR (coalesce(json_extract(n.item_json,'$.producer_record.clip_uid'),json_extract(n.item_json,'$.producer_record.clip_id')) IS NOT NULL AND n.producer_count>1) OR (r.producer_key IS NOT NULL AND coalesce(json_extract(n.item_json,'$.producer_record.clip_uid'),json_extract(n.item_json,'$.producer_record.clip_id')) IS NOT NULL AND r.producer_key<>'number-one:'||coalesce(json_extract(n.item_json,'$.producer_record.clip_uid'),json_extract(n.item_json,'$.producer_record.clip_id'))) THEN 'unreviewed' ELSE r.status END effective_review_status,
+  CASE WHEN n.source_proof_unavailable OR n.lost_native_identity OR r.review_key IS NULL OR r.version_basis<>n.version_basis OR (coalesce(json_extract(n.item_json,'$.producer_record.clip_uid'),json_extract(n.item_json,'$.producer_record.clip_id')) IS NOT NULL AND n.producer_count>1) OR (r.producer_key IS NOT NULL AND r.producer_key IS NOT 'number-one:'||coalesce(json_extract(n.item_json,'$.producer_record.clip_uid'),json_extract(n.item_json,'$.producer_record.clip_id'))) THEN 'unreviewed' ELSE r.status END effective_review_status,
   CASE WHEN r.review_key IS NULL THEN NULL ELSE json_object('review_key',r.review_key,'producer_key',r.producer_key,'item_id',r.item_id,'revision',r.revision,'status',r.status,'notes',r.notes,'reason',r.reason,'reviewed_version',r.reviewed_version,'version_basis',r.version_basis,'saved_at',r.saved_at) END review_json,
-  CASE WHEN (coalesce(json_extract(n.item_json,'$.producer_record.clip_uid'),json_extract(n.item_json,'$.producer_record.clip_id')) IS NOT NULL AND n.producer_count>1) OR (r.producer_key IS NOT NULL AND coalesce(json_extract(n.item_json,'$.producer_record.clip_uid'),json_extract(n.item_json,'$.producer_record.clip_id')) IS NOT NULL AND r.producer_key<>'number-one:'||coalesce(json_extract(n.item_json,'$.producer_record.clip_uid'),json_extract(n.item_json,'$.producer_record.clip_id'))) THEN 1 ELSE 0 END identity_conflict
+  CASE WHEN n.lost_native_identity OR (coalesce(json_extract(n.item_json,'$.producer_record.clip_uid'),json_extract(n.item_json,'$.producer_record.clip_id')) IS NOT NULL AND n.producer_count>1) OR (r.producer_key IS NOT NULL AND r.producer_key IS NOT 'number-one:'||coalesce(json_extract(n.item_json,'$.producer_record.clip_uid'),json_extract(n.item_json,'$.producer_record.clip_id'))) THEN 1 ELSE 0 END identity_conflict
   FROM (${namedLatestItemsSql}) n LEFT JOIN inventory_reviews r
   ON r.source_id=? AND r.episode_id=? AND r.review_key=(SELECT review_key FROM inventory_reviews candidate WHERE candidate.source_id=r.source_id AND candidate.episode_id=r.episode_id AND (candidate.item_id=n.item_id OR candidate.producer_key='number-one:'||coalesce(json_extract(n.item_json,'$.producer_record.clip_uid'),json_extract(n.item_json,'$.producer_record.clip_id'))) ORDER BY CASE WHEN candidate.item_id=n.item_id THEN 0 ELSE 1 END LIMIT 1)`;
 
@@ -539,6 +542,7 @@ export async function listInventory(
       first_received_at: string | null;
       review_json: string | null;
       identity_conflict: number;
+      source_proof_unavailable: number;
       sort_key: string | number | null;
       folder_key: string;
     }>();
@@ -551,7 +555,7 @@ export async function listInventory(
         ? (JSON.parse(row.review_json) as ReviewRow)
         : null;
       const state = reviewView(saved, version);
-      if (row.identity_conflict) {
+      if (row.identity_conflict || row.source_proof_unavailable) {
         state.effectiveStatus = "unreviewed";
         state.changed = true;
       }
@@ -571,6 +575,7 @@ export async function listInventory(
         ...(await manualDerivativeRelations(db, episode, item)),
         review: state,
         identityConflict: row.identity_conflict === 1,
+        sourceProofUnavailable: row.source_proof_unavailable === 1,
         variants: [
           {
             receiptId: row.receipt_id,

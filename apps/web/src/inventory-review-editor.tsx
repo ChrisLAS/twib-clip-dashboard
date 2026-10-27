@@ -169,6 +169,7 @@ export function InventoryReviewEditor({
     !csrfToken ||
     !saved ||
     record.identityConflict === true ||
+    record.sourceProofUnavailable === true ||
     movedWhileDraft;
   return (
     <section
@@ -183,7 +184,13 @@ export function InventoryReviewEditor({
           {reviewLabels[saved?.effectiveStatus ?? "unreviewed"]}
         </span>
       </h3>
-      {saved?.changed && (
+      {record.sourceProofUnavailable && (
+        <p className="inventory-warning">
+          Source proof is unavailable. Notes and decisions are retained; actions
+          need fresh verification.
+        </p>
+      )}
+      {saved?.changed && !record.sourceProofUnavailable && (
         <p className="inventory-warning">
           The observed media version changed. Notes are retained; the previous
           decision needs review.
