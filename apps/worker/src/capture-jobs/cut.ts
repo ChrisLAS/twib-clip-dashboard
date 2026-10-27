@@ -1,3 +1,7 @@
+import {
+  assertSourceProofCurrent,
+  sourceProofCurrentSql,
+} from "../inventory/freshness";
 import { sha256 } from "../inventory/contract";
 import { kindGranted } from "./scope";
 import {
@@ -227,6 +231,7 @@ export async function eligibility(
     .first<{ receipt_id: string; sequence: number; item_json: string }>();
   if (!obs) throw denied();
   const item = JSON.parse(obs.item_json) as InventoryItem;
+  await assertSourceProofCurrent(db, episode, item.id);
   const review =
     row.review_revision === 0
       ? await db
@@ -241,6 +246,8 @@ export async function eligibility(
           }>()
       : await reviewFor(db, episode, item);
   if (
+    item.media?.ref !==
+      cutWireSchema.parse(JSON.parse(row.request_json)).parent.ref ||
     (await inventoryVersion(item)) !== row.parent_version ||
     review?.revision !== row.review_revision ||
     review.status !== "cut_down" ||
@@ -296,7 +303,7 @@ export async function enqueueCut(
   await db.batch([
     db
       .prepare(
-        `INSERT OR IGNORE INTO capture_jobs(job_id,request_json,owner,state,operation,created_at,updated_at) SELECT ?,?,?,'queued','capture',?,? WHERE NOT EXISTS(SELECT 1 FROM inventory_cut_requests child WHERE child.source_plan_request_id=?) AND EXISTS(SELECT 1 FROM inventory_observations o WHERE o.source_id=? AND o.episode_id=? AND o.item_id=? AND o.receipt_id=? AND o.sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence)) AND EXISTS(SELECT 1 FROM ${authorizationTable(row)} WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?) AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`,
+        `INSERT OR IGNORE INTO capture_jobs(job_id,request_json,owner,state,operation,created_at,updated_at) SELECT ?,?,?,'queued','capture',?,? WHERE NOT EXISTS(SELECT 1 FROM inventory_cut_requests child WHERE child.source_plan_request_id=?) AND EXISTS(SELECT 1 FROM inventory_observations o WHERE o.source_id=? AND o.episode_id=? AND o.item_id=? AND o.receipt_id=? AND o.sequence=? AND ${sourceProofCurrentSql()} AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence)) AND EXISTS(SELECT 1 FROM ${authorizationTable(row)} WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?) AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`,
       )
       .bind(
         id,
@@ -350,7 +357,7 @@ export async function retryCut(
     throw denied();
   const { episode, obs, duplicateId } = await eligibility(db, row);
   await retryJob(db, id, value, now, {
-    sql: `${options.expectedAttempt === undefined ? "" : "EXISTS(SELECT 1 FROM capture_jobs WHERE job_id=? AND attempt=?) AND "}NOT EXISTS(SELECT 1 FROM inventory_cut_requests c WHERE c.request_id=? AND c.derivative_json IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM inventory_cut_requests child WHERE child.source_plan_request_id=?) AND EXISTS(SELECT 1 FROM inventory_observations o WHERE o.source_id=? AND o.episode_id=? AND o.item_id=? AND o.receipt_id=? AND o.sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence)) AND EXISTS(SELECT 1 FROM ${authorizationTable(row)} WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?) AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`,
+    sql: `${options.expectedAttempt === undefined ? "" : "EXISTS(SELECT 1 FROM capture_jobs WHERE job_id=? AND attempt=?) AND "}NOT EXISTS(SELECT 1 FROM inventory_cut_requests c WHERE c.request_id=? AND c.derivative_json IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM inventory_cut_requests child WHERE child.source_plan_request_id=?) AND EXISTS(SELECT 1 FROM inventory_observations o WHERE o.source_id=? AND o.episode_id=? AND o.item_id=? AND o.receipt_id=? AND o.sequence=? AND ${sourceProofCurrentSql()} AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence)) AND EXISTS(SELECT 1 FROM ${authorizationTable(row)} WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?) AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`,
     bindings: [
       ...(options.expectedAttempt === undefined
         ? []

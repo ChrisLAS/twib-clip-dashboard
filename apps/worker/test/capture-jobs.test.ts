@@ -47,6 +47,12 @@ beforeEach(() => {
   raw = sqlite;
   sqlite.exec(
     readFileSync(
+      new URL("../migrations/0011_number_one_inventory.sql", import.meta.url),
+      "utf8",
+    ),
+  );
+  sqlite.exec(
+    readFileSync(
       new URL("../migrations/0012_capture_jobs.sql", import.meta.url),
       "utf8",
     ),

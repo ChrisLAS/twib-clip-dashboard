@@ -1,3 +1,4 @@
+import { sourceProofCurrentSql } from "../inventory/freshness";
 import type { Env } from "../env";
 import { HttpError } from "../errors";
 import { INVENTORY_SOURCE, sha256 } from "../inventory/contract";
@@ -112,7 +113,7 @@ export async function acceptPlanResult(
         `INSERT OR IGNORE INTO capture_job_deliveries(delivery_id,request_json,response_json)
       SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM capture_jobs WHERE job_id=? AND lease_id=? AND state=? AND attempt=? AND lease_expires_at>?)
       AND EXISTS(SELECT 1 FROM inventory_cut_requests WHERE request_id=? AND proposal_json IS NULL)
-      AND EXISTS(SELECT 1 FROM inventory_observations o WHERE source_id=? AND episode_id=? AND item_id=? AND receipt_id=? AND sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence))
+      AND EXISTS(SELECT 1 FROM inventory_observations o WHERE source_id=? AND episode_id=? AND item_id=? AND receipt_id=? AND sequence=? AND ${sourceProofCurrentSql()} AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence))
       AND EXISTS(SELECT 1 FROM ${authorizationTable(cut)} WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?)`,
       )
       .bind(
@@ -264,7 +265,7 @@ export async function transitionFirstPass(
   }
   const { episode, obs, duplicateId } = await eligibility(db, cut);
   const guard = `EXISTS(SELECT 1 FROM inventory_cut_requests WHERE request_id=? AND request_json=? AND proposal_json=?)
-    AND EXISTS(SELECT 1 FROM inventory_observations o WHERE source_id=? AND episode_id=? AND item_id=? AND receipt_id=? AND sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence))
+    AND EXISTS(SELECT 1 FROM inventory_observations o WHERE source_id=? AND episode_id=? AND item_id=? AND receipt_id=? AND sequence=? AND ${sourceProofCurrentSql()} AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence))
     AND EXISTS(SELECT 1 FROM ${authorizationTable(cut)} WHERE source_id=? AND episode_id=? AND item_id=? AND revision=? AND status='cut_down' AND reviewed_version=?)
     AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`;
   const bindings = [

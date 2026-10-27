@@ -65,6 +65,9 @@ describe("batch cutdown preparation", () => {
   });
   it("excludes exact five-minute, unknown, ambiguous and absent sources", () => {
     expect(batchEligible(record)).toBe(true);
+    expect(batchEligible({ ...record, sourceProofUnavailable: true })).toBe(
+      false,
+    );
     expect(batchEligible({ ...record, identityConflict: true })).toBe(false);
     expect(
       batchEligible({ ...record, conflictingLatestObservations: true }),

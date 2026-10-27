@@ -1,3 +1,7 @@
+import {
+  assertSourceProofCurrent,
+  sourceProofCurrentSql,
+} from "../inventory/freshness";
 import { jobGrantMaxMilliseconds } from "./scope";
 import { z } from "zod";
 import type { Env } from "../env";
@@ -648,6 +652,7 @@ async function advanceOne(env: Env, w: Work) {
     );
   const obs = matching[0],
     item = JSON.parse(obs.item_json) as InventoryItem;
+  await assertSourceProofCurrent(env.DB, w.inventory_episode_id, item.id);
   const parent = executableCutParentSchema.safeParse({
     item_id: item.id,
     clip_id: item.producer_record?.clip_id ?? null,
@@ -700,7 +705,7 @@ async function advanceOne(env: Env, w: Work) {
       spec,
     }),
   );
-  const guard = `EXISTS(SELECT 1 FROM intake_work_requests w WHERE w.job_id=? AND w.cut_request_id IS NULL AND ${intakeCurrentSql}) AND EXISTS(SELECT 1 FROM inventory_observations o WHERE source_id=? AND episode_id=? AND item_id=? AND receipt_id=? AND sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence)) AND NOT EXISTS(SELECT 1 FROM inventory_reviews WHERE source_id=? AND episode_id=? AND item_id=?)`;
+  const guard = `EXISTS(SELECT 1 FROM intake_work_requests w WHERE w.job_id=? AND w.cut_request_id IS NULL AND ${intakeCurrentSql}) AND EXISTS(SELECT 1 FROM inventory_observations o WHERE source_id=? AND episode_id=? AND item_id=? AND receipt_id=? AND sequence=? AND ${sourceProofCurrentSql()} AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence)) AND NOT EXISTS(SELECT 1 FROM inventory_reviews WHERE source_id=? AND episode_id=? AND item_id=?)`;
   await env.DB.batch([
     env.DB.prepare(
       `INSERT OR IGNORE INTO inventory_cut_requests(request_id,item_id,owner,parent_version,review_revision,request_json,state,created_at,updated_at) SELECT ?,?,?,?,0,?,?,?,? WHERE ${guard}`,
@@ -844,7 +849,7 @@ export async function selectIntakeRange(
   if (!ownerRangeDispatchEnabled(env, w.episode_number, now)) throw conflict();
   const guard = `EXISTS(SELECT 1 FROM intake_work_requests w JOIN capture_jobs j ON j.job_id=w.job_id WHERE w.job_id=? AND w.owner=? AND w.cut_request_id=? AND j.state='succeeded' AND ${intakeCurrentSql})
     AND EXISTS(SELECT 1 FROM inventory_cut_requests c WHERE c.request_id=? AND c.owner=? AND c.request_json=? AND c.state='needs_review' AND c.proposal_json IS NULL AND c.derivative_json IS NULL AND c.transition_code IS NULL AND NOT EXISTS(SELECT 1 FROM capture_jobs j WHERE j.job_id=c.request_id))
-    AND EXISTS(SELECT 1 FROM inventory_observations o WHERE source_id=? AND episode_id=? AND item_id=? AND receipt_id=? AND sequence=? AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence))
+    AND EXISTS(SELECT 1 FROM inventory_observations o WHERE source_id=? AND episode_id=? AND item_id=? AND receipt_id=? AND sequence=? AND ${sourceProofCurrentSql()} AND NOT EXISTS(SELECT 1 FROM inventory_observations n WHERE n.source_id=o.source_id AND n.episode_id=o.episode_id AND n.item_id=o.item_id AND n.sequence>o.sequence))
     AND EXISTS(SELECT 1 FROM ${authorizationTable(cut)} WHERE source_id=? AND episode_id=? AND item_id=? AND revision=0 AND status='cut_down' AND reviewed_version=?)
     AND NOT EXISTS(SELECT 1 FROM inventory_observations d WHERE d.source_id=? AND d.episode_id=? AND d.item_id<>? AND coalesce(json_extract(d.item_json,'$.producer_record.clip_uid'),json_extract(d.item_json,'$.producer_record.clip_id'))=? AND json_extract(d.item_json,'$.media.present')=1 AND d.sequence=(SELECT max(n.sequence) FROM inventory_observations n WHERE n.source_id=d.source_id AND n.episode_id=d.episode_id AND n.item_id=d.item_id))`;
   const bindings = [
